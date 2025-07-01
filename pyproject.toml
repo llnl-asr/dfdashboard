@@ -1,0 +1,44 @@
+[project]
+name = "dfdashboard"
+version = "0.1.0"
+description = "The Interactive Visualization Layer of the DataFlowX Suite"
+readme = "README.md"
+authors = [
+  { name = "Hariharan Devarajan", email = "hariharandev1@llnl.gov" },
+  { name = "Ray Sinurat", email = "raydreww@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "bokeh>=3.7",
+    "numpy>=2",
+    "dask[complete]>=2025.5",
+    "bokeh-sampledata>=2024.2",
+    "tornado>=6",
+    "reactivex>=4",
+    # "zindex_py>=0.0.5",
+    "rich>=14.0.0",
+    "python-intervals==1.10.0.post1",
+    # "tyro>=0.9",
+    "jsonargparse[all]>=4.40.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12.1",
+]
+
+[project.scripts]
+dfdashboard-serve = "dfdashboard:main"
+
+[build-system]
+requires = ["uv_build>=0.7.14,<0.8.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+preview = true
+
+[tool.uv.build-backend]
+module-root = "src"
+
+[tool.uv.sources]
+zindex-py = { path = "../zindex" }
