@@ -1129,7 +1129,6 @@ def reset_dask_cluster():
     client.restart()
     logging.info("Restarting all workers")
 
-
 def setup_dask_cluster(dask_scheduler: str | None = None):
     conf = get_dft_configuration()
     dask_scheduler_conf = dask_scheduler or conf.dask_scheduler
@@ -1137,19 +1136,18 @@ def setup_dask_cluster(dask_scheduler: str | None = None):
         client = Client(scheduler_file=str(dask_scheduler_conf))
         nworkers = len(client.scheduler_info()["workers"])
         update_dft_configuration(workers=nworkers)
-        logging.info(
-            f"Initialized Client with {nworkers} workers and link {client.dashboard_link}"
-        )
+        # logging.info(
+        #     f"Initialized Client with {nworkers} workers and link {client.dashboard_link}"
+        # )
     else:
         cluster = LocalCluster(
             n_workers=conf.workers
         )  # Launches a scheduler and workers locally
         client = Client(cluster)  # Connect to distributed cluster and override default
-        logging.info(
-            f"Initialized Client with {conf.workers} workers and link {client.dashboard_link}"
-        )
+        # logging.info(
+        #     f"Initialized Client with {conf.workers} workers and link {client.dashboard_link}"
+        # )
     return client
-
 
 def main():
     args = parse_args()

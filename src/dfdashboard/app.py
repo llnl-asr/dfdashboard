@@ -1,13 +1,12 @@
+import logging
 import warnings
 from importlib.resources import files
+from typing import Any, Optional, Dict
 
-from bokeh.layouts import column
-from bokeh.server.server import Server
+from distributed import get_client
+
 from bokeh.plotting import figure
-from bokeh.sampledata.sea_surface_temperature import sea_surface_temperature
-from bokeh.models import ColumnDataSource
-
-import pandas as pd
+from bokeh.models import LayoutDOM
 
 import dfdashboard
 import dfdashboard.perf_constants as pc
@@ -16,128 +15,228 @@ from dfdashboard.analyzer import (
     setup_dask_cluster,
     update_dft_configuration,
 )
-from dfdashboard.cli_args import DFDashboardArgs, get_args, Arguments
 
-DFDASHBOARD_PATH = files(dfdashboard)
+from dfdashboard.cli_args import get_args
+from dfdashboard.logging import configure_logging
+from dfdashboard.http.server import HTTPServer
+from dfdashboard.http.bokeh import setup_bokeh_apps
+from dfdashboard.base.component import DFDashboardComponent
 
 warnings.filterwarnings("ignore")
 
+DFDASHBOARD_PATH = files(dfdashboard)
 
-def app(doc):
-    original_df = sea_surface_temperature.copy().reset_index()
-    original_df["time"] = pd.to_datetime(original_df["time"])
-
-    source = ColumnDataSource(data=original_df)
-    plot = figure(x_axis_type="datetime", y_range=(0, 25), y_axis_label="Temperature (Celcius)", title="Sea surface temperature")
-    plot.line("time", "temperature", source=source)
-
-    doc.add_root(column(plot))
+log = logging.getLogger(__name__)
 
 
-# @TODO: make this generalizable for all apps
-# Note that we pass arguments here, e.g.
-# - maybe we can pass FQN and instantiate those FQN from user code
-# - maybe user can pass json object that we can parse as conditions
-def get_conditions():
-    def _get_conditions_(json_object: dict):
-        app_io_cond = "getitem" in json_object["name"] or (
-            (json_object["cat"] == pc.PerfTracerCategory.FETCH_DATA.value)
-            and (json_object["name"] == pc.PerfTracerFetchData.ITER.value)
-        )
-        compute_cond = (
-            # all compute "category"
-            ("compute" in json_object["cat"])
-            # all compute "name"
-            or ("compute" in json_object["name"])
-            # constant-based
-            # - training
-            or (
-                json_object["cat"] == pc.PerfTracerCategory.TRAIN_COMPUTE.value
-                and (
-                    (json_object["name"] == pc.PerfTracerTrainCompute.STEP)
-                    or (json_object["name"] == pc.PerfTracerTrainCompute.FORWARD)
-                    or (json_object["name"] == pc.PerfTracerTrainCompute.BACKWARD)
-                )
-            )
-            # - validation/test
-            or (
-                json_object["cat"] == pc.PerfTracerCategory.TEST_COMPUTE.value
-                and (
-                    (json_object["name"] == pc.PerfTracerTestCompute.STEP)
-                    or (json_object["name"] == pc.PerfTracerTestCompute.FORWARD)
-                )
-            )
-            # some "relaxation for DLIO"
-            or (json_object["name"] == "TorchFramework.compute")
-            or (json_object["name"] == "TFFramework.compute")
-        )
-        io_cond = json_object["cat"] in ["POSIX", "STDIO"]
-        return app_io_cond, compute_cond, io_cond
-
-    return _get_conditions_
+# --- Components -----------------------------------------------------
 
 
-def parallel_sum(array, num_chunks=10):
-    """
-    Computes the sum of a NumPy array in parallel using Dask.
-
-    Parameters:
-        array (np.ndarray): The input array to sum.
-        num_chunks (int): Number of chunks to split the array into.
-
-    Returns:
-        float: The total sum of the array.
-    """
-
-    import numpy as np
-    import dask
-
-    def chunk_sum(arr):
-        return arr.sum()
-
-    chunks = np.array_split(array, num_chunks)
-    tasks = [dask.delayed(chunk_sum)(chunk) for chunk in chunks]
-    total = dask.delayed(sum)(tasks)
-    return total.compute()
+class DummyPlot(DFDashboardComponent):
+    def build(self, runtime) -> LayoutDOM:
+        p = figure(title="Static Dummy Plot", width=400, height=300)
+        p.line(x=[1, 2, 3], y=[4, 6, 2], line_width=2)
+        self.root = p
+        return self.root
 
 
-def _main(args: Arguments):
-    update_dft_configuration(
-        verbose=args.dfanalyzer.verbose,
-        workers=args.dfanalyzer.workers,
-        time_granularity=args.dfanalyzer.time_granularity,
-        conditions=get_conditions(),
-        debug=args.dfanalyzer.debug,
-        batch_size=args.dfanalyzer.batch_size,
-        index_dir=str(args.dfanalyzer.index_dir) if args.dfanalyzer.index_dir is not None else None,
-        # dask_scheduler=str(args.dask_scheduler) if args.dask_scheduler is not None else None,
-        rebuild_index=args.dfanalyzer.rebuild_index,
+# --- Conditions for Analyzer ---------------------------------------------
+
+
+def get_conditions(json_object: dict):
+    app_io_cond = "getitem" in json_object["name"] or (
+        (json_object["cat"] == pc.PerfTracerCategory.FETCH_DATA.value)
+        and (json_object["name"] == pc.PerfTracerFetchData.ITER.value)
     )
-
-    server = Server(
-        {
-            "/": app,
-        },
-        num_procs=1,
-        adress=args.address,
-        port=args.port,
+    compute_cond = (
+        ("compute" in json_object["cat"])
+        or ("compute" in json_object["name"])
+        or (
+            json_object["cat"] == pc.PerfTracerCategory.TRAIN_COMPUTE.value
+            and (
+                (json_object["name"] == pc.PerfTracerTrainCompute.STEP)
+                or (json_object["name"] == pc.PerfTracerTrainCompute.FORWARD)
+                or (json_object["name"] == pc.PerfTracerTrainCompute.BACKWARD)
+            )
+        )
+        or (
+            json_object["cat"] == pc.PerfTracerCategory.TEST_COMPUTE.value
+            and (
+                (json_object["name"] == pc.PerfTracerTestCompute.STEP)
+                or (json_object["name"] == pc.PerfTracerTestCompute.FORWARD)
+            )
+        )
+        or (json_object["name"] == "TorchFramework.compute")
+        or (json_object["name"] == "TFFramework.compute")
     )
+    io_cond = json_object["cat"] in ["POSIX", "STDIO"]
+    return app_io_cond, compute_cond, io_cond
 
-    setup_dask_cluster(dask_scheduler=args.dask_scheduler)
 
-    import numpy as np
-    data = np.random.rand(1_000_000)
-    result = parallel_sum(data)
-    print("Result", result)
+def additional_columns_function(
+    json_object, current_dict, time_approximate, condition_fn, load_data
+):
+    def convert_int(val: Any) -> Optional[int]:
+        try:
+            return int(val)
+        except Exception:
+            return None
 
-    try:
-        server.start()
-        print(f"Open DFDashboard on http://{args.address}:{server.port}")
-        server.io_loop.start()
-    except KeyboardInterrupt:
-        server.stop()
+    d = {}
+    if "args" in json_object:
+        if "step" in json_object["args"]:
+            d["step"] = convert_int(json_object["args"]["step"])
+        if "epoch" in json_object["args"]:
+            d["epoch"] = convert_int(json_object["args"]["epoch"])
+    return d
+
+
+load_cols = {"step": "int64[pyarrow]", "epoch": "int64[pyarrow]"}
+
+
+# --- Main Entry ----------------------------------------------------------
 
 
 def main():
     args = get_args()
-    _main(args=args)
+    configure_logging(log_level=args.log_level, log_file=args.log_file)
+
+    update_dft_configuration(
+        verbose=args.dfanalyzer.verbose,
+        workers=args.dfanalyzer.workers,
+        time_granularity=args.dfanalyzer.time_granularity,
+        conditions=get_conditions,
+        debug=args.dfanalyzer.debug,
+        batch_size=args.dfanalyzer.batch_size,
+        index_dir=str(args.dfanalyzer.index_dir) if args.dfanalyzer.index_dir else None,
+        rebuild_index=args.dfanalyzer.rebuild_index,
+    )
+
+    setup_dask_cluster(dask_scheduler=args.dask_scheduler)
+    dask_client = get_client()
+
+    server = HTTPServer()
+    analyzer = DFAnalyzer(
+        args.trace,
+        load_fn=additional_columns_function,
+        load_cols=load_cols,
+    )
+
+    applications: Dict[str, Dict[str, Any]] = {
+        "/": {
+            "type": "tabs",
+            "args": {"sizing_mode": "stretch_both"},
+            "children": [
+                {
+                    "title": "Events",
+                    "content": {
+                        "type": "component",
+                        "id": "events_table",
+                        "args": {
+                            "class_path": "dfdashboard.components.table.EventsTable",
+                            "args": {},
+                        },
+                    },
+                },
+                {
+                    "title": "Timeline",
+                    "content": {
+                        "type": "column",
+                        "args": {
+                            "spacing": 20,
+                        },
+                        "children": [
+                            {
+                                "type": "row",
+                                "args": {
+                                    "spacing": 20,
+                                },
+                                "children": [
+                                    {
+                                        "type": "component",
+                                        "id": "bandwidth_timeline",
+                                        "args": {
+                                            "class_path": "dfdashboard.components.timeline.BandwidthTimeline",
+                                            "args": {
+                                                "time_col": "io_time",
+                                                "figsize": (800, 400),
+                                            },
+                                        },
+                                    },
+                                    {
+                                        "type": "component",
+                                        "id": "xfer_timeline",
+                                        "args": {
+                                            "class_path": "dfdashboard.components.timeline.TransferSizeTimeline",
+                                            "args": {
+                                                "figsize": (800, 400),
+                                            },
+                                        },
+                                    },
+                                ],
+                            },
+                            {
+                                "type": "row",
+                                "children": [
+                                    {
+                                        "type": "component",
+                                        "id": "dummy_plot",
+                                        "args": {
+                                            "class_path": "dfdashboard.app.DummyPlot",
+                                        },
+                                    },
+                                    {
+                                        "type": "component",
+                                        "id": "polling_plot",
+                                        "args": {
+                                            "class_path": "dfdashboard.components.polling.DummyPollingPlot",
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                },
+            ],
+        },
+        "/demo": {
+            "type": "row",
+            "children": [
+                {
+                    "type": "component",
+                    "id": "dummy_plot",
+                    "args": {
+                        "class_path": "dfdashboard.app.DummyPlot",
+                    },
+                },
+                {
+                    "type": "component",
+                    "id": "polling_plot",
+                    "args": {
+                        "class_path": "dfdashboard.components.polling.DummyPollingPlot",
+                    },
+                },
+            ],
+        },
+    }
+
+    try:
+        server.start(
+            routes=[],
+            dashboard_address=f"{args.address}:{args.port}",
+            default_port=9000,
+        )
+        setup_bokeh_apps(
+            server=server,
+            applications=applications,
+            analyzer=analyzer,
+            dask_client=dask_client,
+            prefix="",
+        )
+        print(f"Open DFDashboard on http://{server.address}:{server.port}")
+        server.io_loop.start()
+    except KeyboardInterrupt:
+        print("\nShutting down gracefully...")
+        dask_client.close()
+        dask_client.cluster.close()
+        server.close()
