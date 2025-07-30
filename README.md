@@ -1,16 +1,20 @@
 # DFDashboard
 The Interactive Visualization Layer of the DataFlowX Suite
 
-## Setup Env
+## Installing package (dev)
 
 ```
-source ./scripts/setup-env.sh
-uv run pip install zindex-py
+DFTRACER_VERSION=develop
+pip install git+https://github.com/LLNL/dftracer.git@main
+pip install git+https://github.com/LLNL/dftracer.git@$main#egg=pydftracer
 ```
 
 ## Running
 
-```
-uv run dfdashboard-serve
-```
+To launch the dashboard with one or more trace files, run:
 
+```bash
+dfdashboard-serve --trace trace1.pfw.gz trace2.pfw.gz ...
+# or
+dfdashboard-serve --trace <DIR>\*.pfw.gz
+```

@@ -3,7 +3,7 @@ import warnings
 from importlib.resources import files
 from typing import Any, Optional, Dict
 
-from distributed import get_client
+from distributed.utils import silence_logging_cmgr
 
 from bokeh.plotting import figure
 from bokeh.models import LayoutDOM
@@ -15,7 +15,6 @@ from dfdashboard.analyzer import (
     setup_dask_cluster,
     update_dft_configuration,
 )
-
 from dfdashboard.cli_args import get_args
 from dfdashboard.logging import configure_logging
 from dfdashboard.http.server import HTTPServer
@@ -97,6 +96,9 @@ load_cols = {"step": "int64[pyarrow]", "epoch": "int64[pyarrow]"}
 # --- Main Entry ----------------------------------------------------------
 
 
+def silence_worker_log():
+    logging.getLogger('distributed').setLevel(logging.CRITICAL)
+
 def main():
     args = get_args()
     configure_logging(log_level=args.log_level, log_file=args.log_file)
@@ -110,16 +112,6 @@ def main():
         batch_size=args.dfanalyzer.batch_size,
         index_dir=str(args.dfanalyzer.index_dir) if args.dfanalyzer.index_dir else None,
         rebuild_index=args.dfanalyzer.rebuild_index,
-    )
-
-    setup_dask_cluster(dask_scheduler=args.dask_scheduler)
-    dask_client = get_client()
-
-    server = HTTPServer()
-    analyzer = DFAnalyzer(
-        args.trace,
-        load_fn=additional_columns_function,
-        load_cols=load_cols,
     )
 
     applications: Dict[str, Dict[str, Any]] = {
@@ -220,23 +212,33 @@ def main():
         },
     }
 
-    try:
-        server.start(
-            routes=[],
-            dashboard_address=f"{args.address}:{args.port}",
-            default_port=9000,
-        )
-        setup_bokeh_apps(
-            server=server,
-            applications=applications,
-            analyzer=analyzer,
-            dask_client=dask_client,
-            prefix="",
-        )
-        print(f"Open DFDashboard on http://{server.address}:{server.port}")
-        server.io_loop.start()
-    except KeyboardInterrupt:
-        print("\nShutting down gracefully...")
-        dask_client.close()
-        dask_client.cluster.close()
-        server.close()
+    with silence_logging_cmgr(logging.CRITICAL):
+        try:
+            server = HTTPServer()
+            dask_client = setup_dask_cluster(dask_scheduler=args.dask_scheduler)
+            dask_client.register_worker_callbacks(silence_worker_log)
+            analyzer = DFAnalyzer(
+                args.trace,
+                load_fn=additional_columns_function,
+                load_cols=load_cols,
+            )
+
+            server.start(
+                routes=[],
+                dashboard_address=f"{args.address}:{args.port}",
+                default_port=9000,
+            )
+            setup_bokeh_apps(
+                server=server,
+                applications=applications,
+                analyzer=analyzer,
+                dask_client=dask_client,
+                prefix="",
+            )
+            print(f"Open DFDashboard on http://{server.address}:{server.port}")
+            server.io_loop.start()
+        except KeyboardInterrupt:
+            print("\nShutting down...")
+            server.io_loop.stop()
+            dask_client.shutdown()
+            server.close()

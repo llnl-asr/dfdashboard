@@ -69,4 +69,4 @@ log "Python version: $(python --version)"
 
 export PYTHONPATH="$ROOT_DIR:$PYTHONPATH"
 
-install_py_pkg_if_needed "uv"
+# install_py_pkg_if_needed "uv"
