@@ -4,9 +4,7 @@ The Interactive Visualization Layer of the DataFlowX Suite
 ## Installing package (dev)
 
 ```
-DFTRACER_VERSION=develop
-pip install git+https://github.com/LLNL/dftracer.git@main
-pip install git+https://github.com/LLNL/dftracer.git@$main#egg=pydftracer
+pip install git+https://github.com/LLNL/DFDashboard.git@main
 ```
 
 ## Running
