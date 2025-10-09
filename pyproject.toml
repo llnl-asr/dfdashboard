@@ -1,0 +1,33 @@
+[project]
+name = "dfdashboard"
+version = "0.1.0"
+description = "The Interactive Visualization Layer of the DataFlowX Suite"
+readme = "README.md"
+authors = [
+  { name = "Ray Sinurat", email = "raydreww@gmail.com" },
+  { name = "Hariharan Devarajan", email = "hariharandev1@llnl.gov" },
+]
+requires-python = ">=3.12"
+dependencies = [
+    "bokeh>=3.7",
+    "numpy>=2",
+    "dask[complete]>=2025.5",
+    "bokeh-sampledata>=2024.2",
+    "tornado>=6",
+    "reactivex>=4",
+    "zindex_py>=0.0.5",
+    "rich>=14.0.0",
+    "python-intervals==1.10.0.post1",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12.1",
+]
+
+[project.scripts]
+dfdashboard-serve = "dfdashboard:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
