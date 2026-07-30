@@ -35,3 +35,6 @@ Selected: 2026-07-30. Source: git@github.com:llnl/dfdashboard.git (default branc
 
 - 2026-07-30: cloned, remote added, plan created.
 - 2026-07-30: CI + docs authored; local tests passed (YAML OK, sphinx build succeeded, venv import smoke check OK after forcing CC=gcc for zindex_py); no in-place dep changes needed; committed on gitlab-migration; pushed main + gitlab-migration to czgitlab.
+- 2026-07-30: CI switched to corona flux-allocation flow, single allocation per pipeline; MR opened.
+- 2026-07-30: Flux allocation made global via allocate/.flux-jobid artifact/release-allocation jobs; wait-event timeout removed.
+- 2026-07-30: branch rebuilt onto merged main; allocate switched to flux alloc --bg.
