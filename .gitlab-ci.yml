@@ -1,0 +1,50 @@
+stages: [test, deploy]
+
+# LC corona batch runner (1 node) — mirrors the dftracer .corona-batch convention.
+.corona-batch:
+  id_tokens:
+    SITE_ID_TOKEN:
+      aud: https://lc.llnl.gov/gitlab
+  tags: [batch, corona]
+  variables:
+    PYTHON_MODULE: python/3.13.2
+    GCC_MODULE: gcc/11.2.1
+    SMALL_QUEUE: pdebug
+    SMALL_QUEUE_WALLTIME: 60
+    SCHEDULER_PARAMETERS: "-N 1 -q $SMALL_QUEUE -t $SMALL_QUEUE_WALLTIME"
+
+test:
+  extends: .corona-batch
+  stage: test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  before_script:
+    - module load $PYTHON_MODULE $GCC_MODULE
+    # zindex_py ships as an sdist; force gcc so it doesn't pick up vendor
+    # compiler wrappers (Cray cc links libfi/libcraymath, which breaks import).
+    - export CC=gcc CXX=g++
+    - python3 -m venv .venv && source .venv/bin/activate
+  script:
+    - pip install -e .
+    # jsonargparse and pyarrow are imported by dfdashboard.cli_args /
+    # dfdashboard.analyzer but are not (yet) declared in pyproject.toml.
+    - pip install jsonargparse pyarrow
+    # No test suite exists yet — run an import smoke check of the public modules.
+    - python -c "import dfdashboard; import dfdashboard.app; import dfdashboard.cli_args; import dfdashboard.analyzer; print('dfdashboard import smoke check OK')"
+    - dfdashboard-serve --help
+
+pages:
+  extends: .corona-batch
+  stage: deploy
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "gitlab-migration"'  # temporary: remove after merge to main
+  before_script:
+    - module load $PYTHON_MODULE
+    - python3 -m venv .venv-docs && source .venv-docs/bin/activate
+  script:
+    - pip install -r docs/requirements.txt
+    - sphinx-build -b html docs public
+  artifacts:
+    paths: [public]
