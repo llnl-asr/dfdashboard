@@ -11,7 +11,10 @@ PODMAN_RUNROOT=/var/tmp/$USER/podman-run
 mkdir -p "$PODMAN_STORE" "$PODMAN_RUNROOT"
 PODMAN="podman --root $PODMAN_STORE --runroot $PODMAN_RUNROOT"
 
-$PODMAN run --rm -v "$PWD:/ws" -w /ws docker.io/library/python:3.11 bash -ec '
+# --user 0:0: container root maps to the host user under rootless podman, so
+# the bind-mounted checkout stays readable even for images with a non-root USER.
+
+$PODMAN run --rm --user 0:0 -v "$PWD:/ws" -w /ws docker.io/library/python:3.11 bash -ec '
   pip install --quiet --upgrade pip
   pip install --quiet -e .
   # jsonargparse/pyarrow are imported by cli_args.py/analyzer.py but are not
@@ -21,7 +24,7 @@ $PODMAN run --rm -v "$PWD:/ws" -w /ws docker.io/library/python:3.11 bash -ec '
   dfdashboard-serve --help
 '
 
-$PODMAN run --rm -v "$PWD:/ws" -w /ws docker.io/library/python:3.11 bash -ec '
+$PODMAN run --rm --user 0:0 -v "$PWD:/ws" -w /ws docker.io/library/python:3.11 bash -ec '
   pip install --quiet --upgrade pip
   pip install --quiet -r docs/requirements.txt
   sphinx-build -b html docs public
