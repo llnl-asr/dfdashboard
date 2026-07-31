@@ -40,3 +40,4 @@ Selected: 2026-07-30. Source: git@github.com:llnl/dfdashboard.git (default branc
 - 2026-07-30: branch rebuilt onto merged main; allocate switched to flux alloc --bg.
 - 2026-07-30: CI now runs inside podman containers (python:3.11) on the allocated node via flux run; Cray-compiler zindex_py workaround dropped (container uses gcc). Pattern validated on cpp-logger.
 - 2026-07-30: fixed allocation-id race — 'flux job last' is user-global and concurrent pipelines cancelled each other's allocations; now uses a unique per-job name (<proj>-$CI_PIPELINE_ID-$CI_JOB_ID) with 'flux jobs --name' lookup, and cleanup only cancels a non-empty .flux-jobid.
+- 2026-07-30: container image bumped python:3.11 -> python:3.12 (pyproject requires-python >=3.12).
