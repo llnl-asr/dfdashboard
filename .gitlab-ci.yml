@@ -91,23 +91,11 @@ distribute:
   script:
     - bash .gitlab/ci/distribute.sh
 
-# Publishes the artifact from test — shell runner, no allocation.
-pages:
-  extends: .corona-flux
-  stage: deploy
-  needs: [test]
-  rules:
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-  script:
-    - echo "Publishing docs built by test"
-  artifacts:
-    paths: [public]
-
 release-allocation:
   extends: .corona-flux
   stage: cleanup
-  # Runs last: alloc → test/image-build → pages → deallocate.
-  needs: [allocate, test, {job: image-build, optional: true}, {job: wheels, optional: true}, {job: pages, optional: true}]
+  # Runs last: alloc → test/image-build → wheels → deallocate.
+  needs: [allocate, test, {job: image-build, optional: true}, {job: wheels, optional: true}]
   rules:
     - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
       when: always
