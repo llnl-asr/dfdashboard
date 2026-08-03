@@ -47,6 +47,15 @@ dfdashboard-serve = "dfdashboard.cli:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# Built by the wheels job, so gitignored; artifacts includes VCS-ignored paths.
+# Needed on both targets: `python -m build` builds the wheel from the sdist, so
+# a wheel-only rule yields a wheel with no frontend.
+[tool.hatch.build.targets.sdist]
+artifacts = ["dfdashboard/web_dist/**"]
+
+[tool.hatch.build.targets.wheel]
+artifacts = ["dfdashboard/web_dist/**"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 

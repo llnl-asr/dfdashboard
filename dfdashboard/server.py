@@ -116,8 +116,10 @@ def create_app(settings: Settings) -> FastAPI:
         ids = [c for c in cards.split(",") if c] or card_ids()
         return {"script": cards_embed_script(ids, begin, end, query)}
 
-    if settings.web_dist:
-        dist = Path(settings.web_dist)
+    # Wheels carry the built SPA at dfdashboard/web_dist; a source checkout
+    # does not, and points --web-dist at web/dist instead.
+    dist = Path(settings.web_dist) if settings.web_dist else Path(__file__).parent / "web_dist"
+    if (dist / "index.html").is_file():
         if (dist / "assets").is_dir():
             app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
