@@ -1,0 +1,393 @@
+/*
+ * Counter-overlay structural styles - the single source shared by the SPA
+ * (imported globally) and the embeddable widget (injected into its shadow
+ * root). Rules reference theme tokens via var(--x) only; the SPA supplies
+ * them from its global :root, the widget from a scoped .counters token block
+ * (widget.css). Keep this file token-free so there is one copy of the layout.
+ */
+.counters {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--hair);
+  background: var(--panel-2, var(--bg));
+  font-family: var(--mono);
+}
+.counters-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.counters-count {
+  font-size: 10px;
+  color: var(--dim);
+}
+.counters-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  max-height: 96px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.counters-pick::-webkit-scrollbar,
+.counters-chips::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.counters-pick::-webkit-scrollbar-thumb,
+.counters-chips::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.counters-pick::-webkit-scrollbar-track,
+.counters-chips::-webkit-scrollbar-track {
+  background: transparent;
+}
+.counters-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.counters-chips {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-bottom: 1px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.counters-fam {
+  flex: 0 0 64px;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.counters-chip {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 7px;
+  color: var(--muted);
+  background: var(--elev);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.counters-chip:hover {
+  color: var(--text-hi);
+  border-color: var(--border);
+}
+.counters-chip.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.counters-modes {
+  display: flex;
+  gap: 0;
+  margin-right: 4px;
+}
+.counters-modes button {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  color: var(--muted);
+  background: var(--elev);
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+.counters-modes button:first-child {
+  border-radius: 3px 0 0 3px;
+}
+.counters-modes button:last-child {
+  border-radius: 0 3px 3px 0;
+  border-left: none;
+}
+.counters-modes button.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.counters-collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+}
+.counters-collapse::before {
+  content: "";
+  border-left: 4px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.1s;
+}
+.counters-collapse.open::before {
+  transform: rotate(90deg);
+}
+.counters-collapse:hover {
+  color: var(--text-hi);
+}
+.counters-plot {
+  position: relative;
+  padding: 4px 0 2px;
+}
+.counters-plot.selectable {
+  cursor: crosshair;
+}
+.counters-chart {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+.counters-lane {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 1px 0;
+}
+.counters-lane-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-right: 10px;
+  overflow: hidden;
+  min-width: 0;
+}
+.counters-lane-label {
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.counters-lane-canvas {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 34px;
+  display: block;
+}
+.counters-main-canvas {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 150px;
+}
+.cstat {
+  display: inline-flex;
+  gap: 9px;
+  font-size: 10px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.cstat b {
+  color: var(--text-hi);
+  font-weight: 600;
+}
+.counters-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--dim);
+  font-size: 12px;
+}
+.counters-legend {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+  padding: 4px 10px 4px 0;
+  overflow: hidden;
+  min-width: 0;
+  font-size: 11px;
+}
+.counters-leg {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  max-width: 100%;
+  overflow: hidden;
+}
+.counters-leg-name {
+  font-weight: 600;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.counters-leg-top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+}
+.counters-expand {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 11px;
+  color: var(--muted);
+  background: var(--elev);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.counters-expand:hover {
+  color: var(--text-hi);
+  border-color: var(--border);
+}
+.counters-expand.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ---- Per-entity heatmap (counter split) ---- */
+.cheat {
+  border-top: 1px solid var(--line);
+}
+.cheat-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 3px 10px;
+  font-size: 10px;
+  color: var(--dim);
+}
+.cheat-title {
+  font-weight: 600;
+}
+.cheat-dims {
+  display: flex;
+  gap: 0;
+}
+.cheat-dims button {
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 1px 7px;
+  color: var(--muted);
+  background: var(--elev);
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+.cheat-dims button:first-child {
+  border-radius: 3px 0 0 3px;
+}
+.cheat-dims button:last-child {
+  border-radius: 0 3px 3px 0;
+  border-left: none;
+}
+.cheat-dims button.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.cheat-read {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cheat-read b {
+  color: var(--text-hi);
+  font-weight: 600;
+}
+.cheat-close {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  font: inherit;
+  font-family: var(--mono);
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.cheat-close:hover {
+  color: var(--text-hi);
+}
+.cheat-plot {
+  display: flex;
+  align-items: stretch;
+}
+.cheat-labels {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  overflow: hidden;
+  padding-right: 8px;
+}
+.cheat-label {
+  display: flex;
+  align-items: center;
+  font-size: 9px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.cheat-canvas {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: block;
+}
+.cheat-dock {
+  flex: 0 0 auto;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 1px 7px;
+  color: var(--muted);
+  background: var(--elev);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.cheat-dock:hover {
+  color: var(--text-hi);
+  border-color: var(--border);
+}
+.cheat-dock.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.cheat-canvas.clickable {
+  cursor: pointer;
+}
+.cheat-label.pinned {
+  color: var(--text-hi);
+  font-weight: 600;
+}
+.cheat-band-label {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  font-size: 9px;
+  color: var(--dim);
+  white-space: nowrap;
+}

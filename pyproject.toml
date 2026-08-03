@@ -1,33 +1,66 @@
 [project]
 name = "dfdashboard"
-version = "0.1.0"
+version = "0.0.1"
 description = "The Interactive Visualization Layer of the DataFlowX Suite"
 readme = "README.md"
 authors = [
-  { name = "Ray Sinurat", email = "raydreww@gmail.com" },
+  { name = "Ray A. O. Sinurat", email = "raydreww@gmail.com" },
   { name = "Hariharan Devarajan", email = "hariharandev1@llnl.gov" },
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "bokeh>=3.7",
-    "numpy>=2",
-    "dask[complete]>=2025.5",
-    "bokeh-sampledata>=2024.2",
-    "tornado>=6",
-    "reactivex>=4",
-    "zindex_py>=0.0.5",
-    "rich>=14.0.0",
-    "python-intervals==1.10.0.post1",
+  "panel>=1.5",
+  "hvplot>=0.11",
+  "holoviews>=1.20",
+  "bokeh>=3.7",
+  "bokeh-fastapi>=0.1",
+  "dask[distributed]>=2025.5",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "starlette-compress>=1",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "pyarrow>=17",
+  "polars>=1.0",
+  "numpy>=2",
+  "numba>=0.60",
+  "reactivex>=4",
+  "rich>=14",
+  "dftracer-utils>=0.0.11",
+  "dftracer-analyzer>=0.0.9",
 ]
+
+
+[project.optional-dependencies]
+scale = ["datashader>=0.16"]
+builder = ["panel-graphic-walker>=0.6"]
+mcp = ["fastmcp>=2"]
+export = ["weasyprint>=62", "playwright>=1.45"]
 
 [dependency-groups]
-dev = [
-    "ruff>=0.12.1",
-]
+dev = ["pytest>=8", "pytest-asyncio>=0.24", "httpx>=0.27", "ruff>=0.12", "ty", "pre-commit>=3.7"]
 
 [project.scripts]
-dfdashboard-serve = "dfdashboard:main"
+dfdashboard-serve = "dfdashboard.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# Built by the wheels job, so gitignored; artifacts includes VCS-ignored paths.
+# Needed on both targets: `python -m build` builds the wheel from the sdist, so
+# a wheel-only rule yields a wheel with no frontend.
+[tool.hatch.build.targets.sdist]
+artifacts = ["dfdashboard/web_dist/**"]
+
+[tool.hatch.build.targets.wheel]
+artifacts = ["dfdashboard/web_dist/**"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
