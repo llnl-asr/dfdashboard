@@ -1,73 +1,82 @@
 API Reference
 =============
 
-This page documents the main public modules of the ``dfdashboard``
-package. The package exposes a single console entry point,
-``dfdashboard-serve``, which maps to ``dfdashboard.app.main``.
+This page documents the main public modules of the ``dfdashboard`` package. The
+package exposes a single console entry point, ``dfdashboard-serve``, which maps
+to ``dfdashboard.cli.main``.
 
-dfdashboard.app
+dfdashboard.cli
 ---------------
 
-Application entry point. Parses arguments, configures logging, sets up
-the Dask cluster and the ``DFAnalyzer``, registers the Bokeh
-applications, and starts the Tornado HTTP server.
+Command-line entry point.
 
-- ``main()`` — the ``dfdashboard-serve`` entry point.
+- ``parse_args(argv=None)`` - parse arguments into a ``Settings`` instance.
+- ``main(argv=None)`` - the ``dfdashboard-serve`` entry point; builds the app
+  and runs it under uvicorn.
 
-dfdashboard.cli_args
---------------------
+dfdashboard.config
+------------------
 
-Command-line and config-file argument handling built on ``jsonargparse``.
+Runtime configuration, built on ``pydantic-settings`` (environment prefix
+``DFDASHBOARD_``).
 
-- ``DFDashboardArgs`` — dashboard options: ``trace`` (required),
-  ``address`` (default ``0.0.0.0``), ``port`` (default ``5006``),
-  ``dask_scheduler``, ``log_level``, ``log_file``.
-- ``DFAnalyzerArgs`` — analyzer options (``dfanalyzer.*`` prefix):
-  ``workers``, ``time_granularity``, ``rebuild_index``, ``verbose``,
-  ``trace_ext``, ``batch_size``, ``reset``, ``debug``,
-  ``dask_scheduler``, ``index_dir``.
-- ``get_args()`` — build the parser and return parsed arguments.
+- ``Settings`` - the configuration model: ``trace_paths``, ``preset``,
+  ``scheduler_address``, ``host``, ``port``, ``web_dist``, ``index_dir``, and
+  service knobs (``auth``, ``idle_timeout_s``).
+- ``Preset`` - ``embedded`` (local, no auth) and ``service`` (auth, no idle
+  timeout) presets over the same knobs.
+- ``Settings.for_preset(preset, **overrides)`` - build settings for a preset.
 
-dfdashboard.analyzer
---------------------
+dfdashboard.server
+------------------
 
-Trace loading and analysis on Dask.
+The FastAPI application.
 
-- ``DFAnalyzer`` — loads DFTracer traces, builds indexes with
-  ``zindex_py``, and produces Dask dataframes for the dashboard.
-- ``DFTConfiguration`` — analyzer configuration (batch size, workers,
-  index directory, host pattern, ...).
-- ``setup_dask_cluster()`` / ``update_dft_configuration()`` — helpers
-  used by the application to configure Dask and the analyzer.
+- ``create_app(settings)`` - build the ASGI app: mounts the viz/analysis
+  routers and response compression, opens the trace index, starts the Dask
+  cluster and task backend, and (with ``web_dist``) serves the SPA.
 
-dfdashboard.base
+dfdashboard.api
+---------------
+
+The HTTP routers included by the app: ``viz_router`` (timeline stream, density,
+counters, stats), ``tasks_router``, ``dashboard_router``, ``logs_router``, and
+``runtime_router``.
+
+dfdashboard.data
 ----------------
 
-The small framework the dashboard is composed from.
+The trace data layer over the dftracer-utils bindings.
 
-- ``component.DFDashboardComponent`` — base class for dashboard
-  components; subclasses implement ``build(runtime)`` and return a Bokeh
-  ``LayoutDOM``.
-- ``page`` — page templating helpers for Bokeh documents.
-- ``runtime`` — shared runtime state passed to components.
+- ``TraceData`` - opens and indexes the trace files and answers the viz queries
+  (timeline stream, density, counters, proctree, breaks, stats).
 
-dfdashboard.components
-----------------------
-
-Built-in dashboard components: ``timeline``, ``bw_timeline`` (bandwidth
-timeline), ``table``, ``polling`` and async utilities.
-
-dfdashboard.http
-----------------
-
-Tornado/Bokeh serving layer.
-
-- ``server.HTTPServer`` — the Tornado HTTP server wrapper.
-- ``bokeh.setup_bokeh_apps()`` — registers Bokeh applications with the
-  server.
-- ``routing`` — URL routing helpers.
-
-dfdashboard.logging
+dfdashboard.compute
 -------------------
 
-Logging setup: ``LogLevel`` enum and ``configure_logging()``.
+Dask cluster and worker glue.
+
+- ``ClusterManager`` - owns a local ``LocalCluster`` or connects to an external
+  scheduler and hands out clients.
+
+dfdashboard.runtime
+-------------------
+
+The task and logging runtime.
+
+- ``EventBus`` / ``InProcessTaskBackend`` - run analysis pipelines and publish
+  progress events.
+- ``logs.get_hub()`` - the log hub that captures Python logging and native
+  dftracer-utils output for the log console.
+
+dfdashboard.analysis
+--------------------
+
+Dask analysis pipelines, the built-in cards, and the Panel embedding
+(``mount_panel``) used to serve dashboards next to the timeline.
+
+dfdashboard.widgets
+-------------------
+
+- ``TimelineWidget`` - the embeddable anywidget timeline for notebooks, backed
+  by the same ``TraceData`` queries.

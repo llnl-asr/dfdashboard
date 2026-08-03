@@ -2,53 +2,91 @@ Introduction
 ============
 
 DFDashboard is the interactive visualization layer of the DataFlowX suite.
-It serves a Bokeh web application that analyzes DFTracer trace files
-(``.pfw.gz``) with Dask and renders interactive timelines, bandwidth
-plots, and tables in the browser.
+It turns DFTracer traces (``.pfw`` / ``.pfw.gz``) into a fast, pannable,
+zoomable timeline in the browser. A FastAPI backend queries the
+dftracer-utils C++ index on demand and streams the result to a SolidJS
+single-page app that renders the timeline on canvas, so the client never
+loads the whole trace.
 
 Features
 --------
 
-- Interactive Bokeh dashboard served over Tornado (default port 5006).
-- Scalable trace analysis with Dask (local cluster or an external
-  scheduler via ``--dask_scheduler``).
-- Reads compressed DFTracer traces (``.pfw.gz``) using ``zindex_py``
-  for random access into gzip files.
-- Composable components (timelines, bandwidth timeline, tables) built on
-  a small component/page/runtime framework (``dfdashboard.base``).
-- Configurable via command-line flags or a JSON/YAML config file
-  (``-c/--config``, via ``jsonargparse``).
+- Perfetto-style timeline on canvas: smooth pan/zoom, pid/tid lanes, depth
+  stacking, hover tooltips, and click-to-inspect arbitrary event ``args``.
+  Each viewport change re-queries the backend at the right level of detail.
+- Counter overlays for ``ph="C"`` events (system, aggregate, and profile
+  families), with per-pid and per-node splits and per-host telemetry drawn on
+  the node tracks.
+- Flamegraph and density overview for hot call paths and dead time.
+- Analysis dashboards built on Dask and Panel, embeddable next to the timeline
+  or on their own.
+- An embeddable notebook widget (anywidget) exposing the same timeline in
+  Jupyter over the widget comm.
+
+Architecture
+------------
+
+The frontend is imperative canvas for the 60fps path, with SolidJS driving only
+the UI chrome. The backend serves Arrow IPC for the timeline stream and JSON for
+counters, density, and stats. Analysis runs on an in-process Dask cluster by
+default, or an external scheduler in service mode.
 
 Installation
 ------------
 
-DFDashboard requires Python 3.12 or newer.
+DFDashboard requires Python 3.12 or newer. ``dftracer-utils`` (the trace index
+bindings) and ``dftracer-analyzer`` are core dependencies and install
+automatically.
 
 .. code-block:: bash
 
-   pip install git+https://github.com/LLNL/DFDashboard.git@main
-
-or from a local checkout:
-
-.. code-block:: bash
-
-   git clone https://github.com/LLNL/DFDashboard.git
-   cd DFDashboard
    pip install -e .
+
+To develop against a local checkout of the bindings, install them editable on
+top:
+
+.. code-block:: bash
+
+   pip install -e /path/to/dftracer-utils
+
+Building the frontend
+---------------------
+
+The Python package ships the notebook widget bundle, but the browser SPA is
+built separately and served via ``--web-dist``:
+
+.. code-block:: bash
+
+   cd web
+   npm ci
+   npm run build            # -> web/dist
 
 Quick start
 -----------
 
-Launch the dashboard with one or more trace files:
+Launch the dashboard with one or more trace files (a directory is expanded to
+its ``*.pfw.gz`` files):
 
 .. code-block:: bash
 
-   dfdashboard-serve --trace trace1.pfw.gz trace2.pfw.gz ...
-   # or a glob over a directory of traces
-   dfdashboard-serve --trace <DIR>/*.pfw.gz
+   dfdashboard-serve --trace run1.pfw.gz run2.pfw.gz --web-dist web/dist
+   dfdashboard-serve --trace ./traces --web-dist web/dist
 
-Then open ``http://localhost:5006`` in a browser. Useful options include
-``--address`` and ``--port`` for the HTTP server, ``--log_level`` /
-``--log_file`` for logging, and analyzer options under the
-``--dfanalyzer.*`` prefix (e.g. ``--dfanalyzer.workers``,
-``--dfanalyzer.rebuild_index``, ``--dfanalyzer.time_granularity``).
+Then open ``http://127.0.0.1:5006``. Without ``--web-dist`` the API and Panel
+dashboards are still served; only the SPA needs the built assets.
+
+Useful options: ``--preset`` (``embedded`` for a local no-auth session, or
+``service`` for auth with no idle timeout), ``--host`` / ``--port`` for the bind
+address, ``--scheduler`` to attach an external Dask scheduler instead of a local
+cluster, and ``--index-dir`` to override where the trace index is stored.
+
+Docker
+------
+
+.. code-block:: bash
+
+   docker build -t dfdashboard .
+   docker run --rm -p 5006:5006 -v /path/to/traces:/data:ro dfdashboard
+
+The image builds the SPA, installs the package, and serves traces mounted at
+``/data``.
