@@ -32,7 +32,7 @@ or from a local checkout:
 
 .. code-block:: bash
 
-   git clone https://github.com/LLNL/DFDashboard.git
+   git clone https://github.com/llnl-asr/dfdashboard.git
    cd DFDashboard
    pip install -e .
 
