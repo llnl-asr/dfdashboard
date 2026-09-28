@@ -4,7 +4,7 @@ The Interactive Visualization Layer of the DataFlowX Suite
 ## Installing package (dev)
 
 ```
-pip install git+https://github.com/LLNL/DFDashboard.git@main
+pip install git+https://github.com/llnl-asr/dfdashboard.git@main
 ```
 
 ## Running
