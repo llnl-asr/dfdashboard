@@ -4,14 +4,12 @@ import os
 import pytest
 
 pytest.importorskip("dftracer.utils")
-pytest.importorskip("polars")
 
 from dfdashboard.data.trace import TraceData  # noqa: E402
 
 
 def _write_trace(directory: str) -> str:
     lines = [
-        "[",
         '{"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"host"}}',
     ]
     base = 1_000_000
@@ -40,9 +38,13 @@ def test_info_and_events(tmp_path):
 
     span = info.global_max_ts - info.global_min_ts
     events = td.events(0, span)
-    assert len(events) == 6
-    assert min(e["ts"] for e in events) == 0  # ts normalized to 0-based
-    assert {e["cat"] for e in events} == {"POSIX", "APP"}
+    # plus the HH metadata row, which carries the host name and has no clock
+    meta = [e for e in events if e["ph"] == "M"]
+    assert [e["name"] for e in meta] == ["HH"]
+    timed = [e for e in events if e["ph"] != "M"]
+    assert len(timed) == 6
+    assert min(e["ts"] for e in timed) == 0  # ts normalized to 0-based
+    assert {e["cat"] for e in timed} == {"POSIX", "APP"}
 
     posix = td.events(0, span, query='cat == "POSIX"')
     assert len(posix) == 5
@@ -93,7 +95,7 @@ def test_events_arrow_roundtrips(tmp_path):
     span = td.info().global_max_ts - td.info().global_min_ts
 
     tbl = ipc.open_stream(io.BytesIO(td.events_arrow(0, span))).read_all()
-    assert tbl.num_rows == 6
+    assert tbl.num_rows == 7  # 6 events plus the HH metadata row
     assert "ts" in tbl.column_names
     assert min(tbl["ts"].to_pylist()) == 0
 
@@ -111,7 +113,7 @@ def test_proctree_has_bytes(tmp_path):
 
 def _write_multirun_trace(directory, num_runs=3, run_us=1_000_000, gap_us=10_000):
     base = 1_000_000_000
-    lines = ["["]
+    lines: list[str] = []
     for r in range(num_runs):
         pid = 100 + r
         start = base + r * (run_us + gap_us)
@@ -129,7 +131,6 @@ def _write_multirun_trace(directory, num_runs=3, run_us=1_000_000, gap_us=10_000
             f'{{"id":1,"pid":{pid},"tid":{pid * 10},"name":"end","cat":"dftracer",'
             f'"ph":"X","ts":{end},"dur":1,"args":{{"num_events":3}}}}'
         )
-    lines.append("]")
     path = os.path.join(directory, "multirun.pfw.gz")
     with gzip.open(path, "wt") as fh:
         fh.write("\n".join(lines) + "\n")
@@ -167,3 +168,42 @@ def test_breaks_none_for_continuous_trace(tmp_path):
     res = td.breaks()
     assert res["gaps"] == []
     assert res["multi_run"] is False
+
+
+def test_aggregated_records_keep_their_statistics(tmp_path):
+    import io
+
+    import pyarrow.ipc as ipc
+
+    base = 1_000_000
+    lines = [
+        f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,"ph":3,"ts":{base},"dur":800,'
+        '"args":{"dft_cnt":10,"dur_sum":500,"ret":4096}}',
+        f'{{"name":"write","cat":"POSIX","pid":1,"tid":1,"ph":1,"ts":{base + 500},{""}'
+        '"dur":20,"args":{"ret":8}}',
+    ]
+    path = os.path.join(str(tmp_path), "agg.pfw.gz")
+    with gzip.open(path, "wt") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+    td = TraceData(path, index_dir=str(tmp_path / "idx"))
+    span = td.info().global_max_ts - td.info().global_min_ts
+
+    events = td.events(0, span)
+    agg = [e for e in events if e["name"] == "read"]
+    assert len(agg) == 1, "an aggregated record must be reported once"
+    assert agg[0]["agg"] is True
+    assert agg[0]["count"] == 10
+    assert agg[0]["total"] == 500
+    assert agg[0]["dur"] == 800
+    plain = next(e for e in events if e["name"] == "write")
+    assert plain["agg"] is False
+    assert plain["count"] == 1
+
+    tbl = ipc.open_stream(io.BytesIO(b"".join(td.timeline_stream(0, span, width=4)))).read_all()
+    rows = tbl.to_pydict()
+    by_name = {
+        n: (a, c, t) for n, a, c, t in zip(rows["name"], rows["agg"], rows["count"], rows["total"])
+    }
+    assert by_name["read"] == (1, 10, 500.0)
+    assert by_name["write"] == (0, 1, 20.0)

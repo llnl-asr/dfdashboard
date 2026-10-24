@@ -88,6 +88,7 @@ class InProcessTaskBackend:
         events: EventBus,
         lane_limits: Optional[dict[Lane, int]] = None,
         data: Any = None,
+        data_provider: Optional[Callable[[], Any]] = None,
         client_provider: Any = None,
         result_cache_size: int = 64,
         max_records: int = 512,
@@ -95,6 +96,7 @@ class InProcessTaskBackend:
         self._resolve = resolve_pipeline
         self._events = events
         self._data = data
+        self._data_provider = data_provider
         self._client_provider = client_provider
         self._records: dict[str, TaskRecord] = {}
         self._active_by_key: dict[str, str] = {}
@@ -218,7 +220,7 @@ class InProcessTaskBackend:
                 on_progress=on_progress,
                 on_partial=lambda p: self._events.emit(f"task.{rec.task_id}.partial", p),
                 cancel=rec._cancel,
-                data=self._data,
+                data=self._data_provider() if self._data_provider is not None else self._data,
                 client_provider=self._client_provider,
             )
             result = await pipeline.run(ctx, params)

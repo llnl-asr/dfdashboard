@@ -11,6 +11,7 @@ export function PanelEmbed(props: {
   query?: string;
   nonce?: number;
   visible?: boolean;
+  theme?: "dark" | "light";
 }) {
   let injected: HTMLScriptElement | undefined;
   let timer: number | undefined;
@@ -39,6 +40,8 @@ export function PanelEmbed(props: {
     if (props.end) params.set("end", props.end);
     if (props.query) params.set("query", props.query);
     if (props.nonce) params.set("_r", String(props.nonce));
+    // Cards are painted server-side, so a theme switch re-embeds them.
+    if (props.theme) params.set("theme", props.theme);
     const key = params.toString();
     // Skip while hidden; re-embed only on a real param change, not a visibility toggle.
     if (props.visible === false) return;

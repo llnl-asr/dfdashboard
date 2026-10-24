@@ -8,6 +8,11 @@ author = "Ray A. O. Sinurat, Hariharan Devarajan"
 
 extensions = []
 
+# Every reference must resolve. Combined with -W (and fail_on_warning on Read
+# the Docs) a broken link or a missing target fails the build instead of
+# shipping a silent dead link.
+nitpicky = True
+
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 

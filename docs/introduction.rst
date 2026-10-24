@@ -37,6 +37,10 @@ Installation
 DFDashboard requires Python 3.12 or newer. ``dftracer-utils`` (the trace index
 bindings) and ``dftracer-analyzer`` are core dependencies and install
 automatically.
+They follow the develop-branch prereleases, so ``pyproject.toml`` asks for them
+with ``.dev0`` version floors.
+A plain install resolves the newest prerelease without turning prereleases on
+for every other package.
 
 .. code-block:: bash
 
@@ -71,6 +75,12 @@ its ``*.pfw.gz`` files):
 
    dfdashboard-serve --trace run1.pfw.gz run2.pfw.gz --web-dist web/dist
    dfdashboard-serve --trace ./traces --web-dist web/dist
+
+To follow a directory tree that gains new runs while the server runs, pass
+``--watch`` with the root of that tree instead of ``--trace``. The server
+rescans the tree, prefers a compact set from ``dftracer_split`` over the raw
+files of the same run, and reports every change on ``/api/stream``. The layout
+to write is in :doc:`runs`.
 
 Then open ``http://127.0.0.1:5006``. Without ``--web-dist`` the API and Panel
 dashboards are still served; only the SPA needs the built assets.

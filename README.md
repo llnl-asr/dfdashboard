@@ -48,8 +48,13 @@ uv pip install -e .
 ```
 
 `dftracer-utils` (the trace index bindings) and `dftracer-analyzer` are core
-dependencies and install automatically. To develop against a local checkout of
-the bindings, install them editable on top:
+dependencies and install automatically.
+They follow the develop-branch prereleases, so `pyproject.toml` asks for them
+with `.dev0` version floors.
+A plain install resolves the newest prerelease without turning prereleases on
+for every other package.
+To develop against a local checkout of the bindings, install them editable on
+top:
 
 ```bash
 uv pip install -e /path/to/dftracer-utils
@@ -81,21 +86,16 @@ npx vite build --config vite.widget.config.ts   # -> dfdashboard/widgets/static/
 dfdashboard-serve --trace run1.pfw.gz run2.pfw.gz --web-dist web/dist
 # a directory is expanded to its *.pfw.gz files
 dfdashboard-serve --trace ./traces --web-dist web/dist
+# follow a tree of runs that keeps growing
+dfdashboard-serve --watch /path/to/runs --web-dist web/dist
 ```
 
 Then open http://127.0.0.1:5006. Without `--web-dist` the API and Panel
 dashboards are still served; only the SPA needs the built assets.
 
-Key flags:
-
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--trace` | (none) | trace files or directories |
-| `--preset` | `embedded` | `embedded` (local, no auth) or `service` (auth, no idle timeout) |
-| `--host` / `--port` | `127.0.0.1` / `5006` | bind address |
-| `--web-dist` | (none) | directory holding the built SPA `index.html` |
-| `--scheduler` | (none) | external Dask scheduler; default spawns a local cluster |
-| `--index-dir` | per-user cache | where the trace index is stored |
+`--watch` rescans the tree while the server runs, so `/api/runs` follows a tree that keeps growing.
+[Run directories](docs/runs.rst) describes the layout to write and how a finished run is recognised.
+Every option is in `dfdashboard-serve --help`.
 
 ## Docker
 

@@ -17,16 +17,28 @@ from starlette_compress import CompressMiddleware
 
 from .analysis.base import get_pipeline, load_plugins
 from .analysis.cards import card_ids
+from .analysis.docloop import bind as bind_doc_loop
 from .analysis.panel_app import cards_embed_script, embed_script, mount_panel
 from .analysis.pipelines import register_builtins
-from .api import dashboard_router, logs_router, runtime_router, tasks_router, viz_router
+from .api import (
+    dashboard_router,
+    logs_router,
+    prov_router,
+    runs_router,
+    runtime_router,
+    tasks_router,
+    viz_router,
+)
 from .compute.cluster import ClusterManager
 from .compute.worker import set_worker_trace
 from .config import Settings
 from .data._calltree import warmup
-from .data.trace import TraceData
+from .data.trace import trace_data
+from .data.watch import RunRegistry, Watcher
 from .runtime import EventBus, InProcessTaskBackend
 from .runtime.logs import get_hub
+from .runtime.pool import acquire as acquire_pools
+from .runtime.pool import release as release_pools
 
 # Arrow is left uncompressed: the middleware buffers streaming responses to
 # compress them, which would defeat the progressive timeline stream. JSON
@@ -63,26 +75,79 @@ def create_app(settings: Settings) -> FastAPI:
         hub.bind_loop(asyncio.get_running_loop())
         hub.start_stderr_capture()  # must tee before dftracer-utils inits
         app.state.loghub = hub
+        bind_doc_loop(app)  # Bokeh builds documents in worker threads
 
         files = _expand(settings.trace_paths)
-        if settings.trace_paths and not files:
-            raise RuntimeError(f"no .pfw.gz files found in: {settings.trace_paths}")
+        pool_set = acquire_pools(settings.io_workers, settings.compute_workers)
+        pool_set.bind(asyncio.get_running_loop())
         runtime = Runtime(python_threads=16)
         index_dir = _index_dir(settings)
-        log.info("loaded %d trace file(s); index_dir=%s", len(files), index_dir)
         app.state.index_dir = index_dir
+        app.state.scoped_traces = {}
+        app.state.scoped_seq = -1
+        registry: RunRegistry | None = None
+        watcher: Watcher | None = None
+        if settings.watch_root:
+            registry = RunRegistry(
+                settings.watch_root,
+                index_dir,
+                runtime=runtime,
+                settle_s=settings.settle_s,
+                stale_s=settings.stall_s,
+                markers=settings.done_markers,
+                pool=pool_set.io,
+            )
+            registry.refresh()
+            log.info(
+                "watching %s: %d run(s), %d file(s); index_dir=%s",
+                settings.watch_root,
+                len(registry.run_ids()),
+                registry.n_files(),
+                index_dir,
+            )
+            watcher = Watcher(
+                registry,
+                settings.watch_interval_s,
+                on_change=lambda: set_worker_trace(registry.trace()),
+            )
+            watcher.start()
+            trace = registry.trace()
+        else:
+            if settings.trace_paths and not files:
+                raise RuntimeError(f"no .pfw.gz files found in: {settings.trace_paths}")
+            log.info("loaded %d trace file(s); index_dir=%s", len(files), index_dir)
+            source = (
+                settings.trace_paths[0]
+                if len(settings.trace_paths) == 1 and os.path.isdir(settings.trace_paths[0])
+                else None
+            )
+            trace = (
+                trace_data(files, index_dir=index_dir, runtime=runtime, source=source)
+                if files
+                else None
+            )
+        app.state.registry = registry
         app.state.n_files = len(files)
-        trace = TraceData(files, index_dir=index_dir, runtime=runtime) if files else None
         app.state.trace = trace
         set_worker_trace(trace)  # same-process Dask workers reuse this handle
         asyncio.create_task(asyncio.to_thread(warmup))  # JIT the flamegraph off-path
 
         register_builtins()
+        # dfanalyzer can only be imported from the main thread, so warm it here
+        # rather than on the worker thread that later runs the pipeline.
+        from .analysis._dfa import warmup as warm_analyzer
+
+        if warm_analyzer():
+            log.info("dfanalyzer import warmed")
         load_plugins()
         events = EventBus()
         cluster = ClusterManager(settings.scheduler_address)
         backend = InProcessTaskBackend(
-            get_pipeline, events, data=trace, client_provider=cluster.client
+            get_pipeline,
+            events,
+            data=trace,
+            data_provider=(lambda: registry.trace()) if registry is not None else None,
+            client_provider=cluster.client,
         )
         await backend.start()
         app.state.events = events
@@ -91,13 +156,20 @@ def create_app(settings: Settings) -> FastAPI:
         try:
             yield
         finally:
+            if watcher is not None:
+                watcher.stop()
+            if registry is not None:
+                registry.close()
             await backend.stop()
             await cluster.close()
             runtime.shutdown()
+            release_pools()
 
     app = FastAPI(title="DFDashboard", lifespan=lifespan)
     app.add_middleware(CompressMiddleware)  # zstd -> brotli -> gzip
     app.include_router(viz_router)
+    app.include_router(runs_router)
+    app.include_router(prov_router)
     app.include_router(tasks_router)
     app.include_router(dashboard_router)
     app.include_router(logs_router)
@@ -111,10 +183,10 @@ def create_app(settings: Settings) -> FastAPI:
 
     @app.get("/api/panel/cards/embed")
     async def panel_cards_embed(
-        cards: str = "", begin: str = "", end: str = "", query: str = ""
+        cards: str = "", begin: str = "", end: str = "", query: str = "", theme: str = "dark"
     ) -> dict:
         ids = [c for c in cards.split(",") if c] or card_ids()
-        return {"script": cards_embed_script(ids, begin, end, query)}
+        return {"script": cards_embed_script(ids, begin, end, query, theme)}
 
     # Wheels carry the built SPA at dfdashboard/web_dist; a source checkout
     # does not, and points --web-dist at web/dist instead.

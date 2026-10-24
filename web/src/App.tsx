@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 import { Rail, type TraceView } from "./ui/Rail";
+import { ProvenanceView } from "./prov/ProvenanceView";
 import { LogConsole } from "./ui/LogConsole";
 import { StatusBar } from "./ui/StatusBar";
 import Analysis from "./analysis/Analysis";
@@ -11,6 +12,9 @@ import {
   fetchCallTree,
   fetchHistogram,
   fetchInfo,
+  fetchRuns,
+  openRunsStream,
+  type RunInfo,
   fetchLayers,
   fetchOverviewDensity,
   fetchProcTree,
@@ -20,6 +24,8 @@ import {
   fetchVizBreaks,
   fetchVizStats,
   apiUrl,
+  clearRunScope,
+  currentRunScope,
   SINGLE_FILE,
 } from "./data/api";
 import { calleesTree, callersTree, functionList } from "./flame/sandwich";
@@ -84,24 +90,29 @@ const OV_CATALOG: Record<string, OvCard> = {
   bw_by_host: { label: "Bandwidth by host", kind: "panel", w: 2, h: 2 },
   io_summary: { label: "I/O by host", kind: "panel", w: 2, h: 2 },
   busiest: { label: "Busiest processes", kind: "panel", w: 2, h: 3 },
+  runs: { label: "Runs", kind: "solid", w: 6, h: 2 },
 };
 const OV_CATALOG_IDS = Object.keys(OV_CATALOG);
+// Newest runs first, and only what fits without scrolling for a first glance.
+const OV_RUNS_ROWS = 6;
 const OV_PANEL_IDS = OV_CATALOG_IDS.filter((id) => OV_CATALOG[id].kind === "panel");
 const OV_DEFAULT_LAYOUT: DashLayout = {
-  top_events: { x: 1, y: 1, w: 4, h: 2 },
-  idle: { x: 5, y: 1, w: 2, h: 2 },
-  bandwidth: { x: 1, y: 3, w: 3, h: 2 },
-  latency: { x: 4, y: 3, w: 3, h: 2 },
-  op_time: { x: 1, y: 5, w: 2, h: 2 },
-  op_counts: { x: 3, y: 5, w: 2, h: 2 },
-  busiest: { x: 5, y: 5, w: 2, h: 3 },
-  data_meta: { x: 1, y: 7, w: 2, h: 1 },
-  read_write: { x: 3, y: 7, w: 2, h: 1 },
-  avg_xfer: { x: 1, y: 8, w: 2, h: 1 },
-  bw_by_host: { x: 3, y: 8, w: 2, h: 1 },
-  io_summary: { x: 5, y: 8, w: 2, h: 2 },
-  xfer_hist: { x: 1, y: 9, w: 2, h: 2 },
-  access_pattern: { x: 3, y: 9, w: 2, h: 1 },
+  runs: { x: 1, y: 1, w: 6, h: 1 },
+  top_events: { x: 1, y: 2, w: 4, h: 2 },
+  idle: { x: 5, y: 2, w: 2, h: 2 },
+  bandwidth: { x: 1, y: 4, w: 3, h: 2 },
+  latency: { x: 4, y: 4, w: 3, h: 2 },
+  op_time: { x: 1, y: 6, w: 2, h: 2 },
+  op_counts: { x: 3, y: 6, w: 2, h: 2 },
+  busiest: { x: 5, y: 6, w: 2, h: 3 },
+  data_meta: { x: 1, y: 8, w: 2, h: 1 },
+  read_write: { x: 3, y: 8, w: 2, h: 1 },
+  avg_xfer: { x: 1, y: 9, w: 2, h: 1 },
+  bw_by_host: { x: 3, y: 9, w: 2, h: 1 },
+  io_summary: { x: 5, y: 9, w: 2, h: 2 },
+  xfer_hist: { x: 1, y: 10, w: 2, h: 2 },
+  access_pattern: { x: 3, y: 10, w: 2, h: 1 },
+
 };
 const OV_DEFAULT: DashState = { cards: OV_CATALOG_IDS, layout: OV_DEFAULT_LAYOUT };
 const OV_LS_KEY = "dfd.dash.overview";
@@ -229,6 +240,215 @@ export default function App() {
   const overviewCache = new Map<string, DensityBlock[]>();
 
   const [info, setInfo] = createSignal<InfoResponse | null>(null);
+  const [runs, setRuns] = createSignal<RunInfo[]>([]);
+  const [runsFeed, setRunsFeed] = createSignal<"off" | "live">("off");
+  const [watchMode, setWatchMode] = createSignal<"poll" | "events">("poll");
+  let runsSeq = -1;
+  let stopRuns: (() => void) | null = null;
+  // The first runs frame beats /api/info on every load, so a page can be open
+  // when the first records land. It then runs the trace load in place.
+  let recovering = false;
+  let refreshing = false;
+  let refreshedAt = 0;
+  const activeRun = () => new URLSearchParams(location.search).get("run") || "";
+
+  // A tree can hold hundreds of runs, so the bar pins only the ones worth
+  // clicking and the rest move behind a filterable list.
+  const RUN_PIN_FINISHED = 2;
+  const RUN_LIST_MAX = 300;
+  const [runPicker, setRunPicker] = createSignal(false);
+  const [runFilter, setRunFilter] = createSignal("");
+  const pinnedRuns = () => {
+    const all = runs();
+    const live = all.filter((r) => r.state === "live" || r.state === "stalled");
+    const done = all.filter((r) => r.state !== "live" && r.state !== "stalled");
+    const keep = new Set([...live, ...done.slice(-RUN_PIN_FINISHED)].map((r) => r.id));
+    if (activeRun()) keep.add(activeRun());
+    return all.filter((r) => keep.has(r.id));
+  };
+  const hiddenRuns = () => runs().length - pinnedRuns().length;
+  const listedRuns = () => {
+    const q = runFilter().trim().toLowerCase();
+    const hits = q
+      ? runs().filter((r) =>
+          `${r.id} ${r.format} ${r.state} ${r.dir}`.toLowerCase().includes(q),
+        )
+      : runs();
+    return hits.slice(0, RUN_LIST_MAX);
+  };
+
+  // Process tree, hosts and per-process io. Re-run when a run appears while the
+  // page is open, otherwise the new pids have no host label.
+  // Everything that needs /api/info, in one place: the boot and the recovery
+  // path use it, so a page that opened on an empty tree fills in completely
+  // instead of showing a waiting banner next to empty cards.
+  async function loadTrace(i: InfoResponse): Promise<boolean> {
+    const tr = i.time_range;
+    const span = tr ? tr.max_timestamp_us - tr.min_timestamp_us : 0;
+    if (span <= 0) {
+      setError("No indexed events with a valid time range were found.");
+      setLoading(false);
+      return false;
+    }
+    setError(null);
+    totalSpan = span;
+    timeline?.setTotalSpan(span);
+    fetchVizBreaks()
+      .then((br) => {
+        if (br.valid_end && br.valid_end > (br.valid_start ?? 0)) {
+          timeline?.setTimingBounds(br.valid_start ?? 0, br.valid_end, br.max_life ?? 0);
+        }
+        setMultiRun(br.multi_run);
+        setTimelapse(false); // offer the toggle, but do not collapse gaps by default
+        setBreaks(br.gaps);
+        timeline?.setBreaks(br.gaps, false);
+      })
+      .catch(() => {});
+    loadOverview();
+    loadLayers(true);
+    void loadProcs();
+    return true;
+  }
+
+  // Retry once if empty: the first request may race the summary build.
+  async function loadLayers(retry: boolean): Promise<void> {
+    try {
+      const r = await fetchLayers();
+      setFileCounts({ total: r.total_files, io: r.io_files });
+      if (Object.keys(r.layers).length) {
+        LAYER_MAP = r.layers;
+        setLayerCats([...new Set(Object.values(r.layers))].sort());
+      } else if (retry) setTimeout(() => void loadLayers(false), 1500);
+    } catch {
+      /* heuristic fallback */
+    }
+  }
+
+  async function recoverFromWaiting(): Promise<void> {
+    if (recovering) return;
+    recovering = true;
+    try {
+      const i = await fetchInfo();
+      setInfo(i);
+      setLoading(false);
+      await loadTrace(i);
+    } catch {
+      /* still empty; the next runs frame retries */
+    } finally {
+      recovering = false;
+    }
+  }
+
+  function loadProcs(): void {
+      fetchProcTree()
+        .then((pt) => {
+          timeline?.setProcTree(pt.nodes);
+          setOvProcs(
+            pt.nodes.map((n) => ({
+              pid: n.pid,
+              host: n.host || "",
+              label: n.rank != null && n.rank !== "" ? `rank ${n.rank}` : `proc ${n.pid}`,
+            })),
+          );
+          const hosts = new Map<number, string>();
+          const bytes = new Map<number, number>();
+          const ioBusy = new Map<number, number>();
+          const labels = new Map<string, string>();
+          const ranks = new Map<string, string>();
+          for (const n of pt.nodes) {
+            if (n.host) hosts.set(n.pid, n.host);
+            if (n.bytes) bytes.set(n.pid, n.bytes);
+            if (n.io_busy) ioBusy.set(n.pid, n.io_busy);
+            const hasRank = n.rank != null && n.rank !== "";
+            labels.set(String(n.pid), hasRank ? `rank ${n.rank}` : `proc ${n.pid}`);
+            if (hasRank) ranks.set(String(n.pid), n.rank as string);
+          }
+          timeline?.setHosts(hosts);
+          timeline?.setBytes(bytes);
+          timeline?.setIoBusy(ioBusy);
+          timeline?.setProcessLabels(labels);
+          setProcRank(ranks);
+          setGaps(timeline?.topGaps(15) ?? []); // relabel with resolved ranks
+          loadKpis(new Set(pt.nodes.map((n) => n.pid)).size);
+        })
+        .catch(() => loadKpis(0));
+  }
+
+  // Refresh what the current view shows. Cheap: one info scan (cached by the
+  // file set) and one window of slices.
+  async function refreshWindow() {
+    // A watched run changes state once per scan. Refetching on every frame
+    // relayouts every lane and reads as a flicker, so at most one refresh per
+    // two seconds, and never while one is still in flight.
+    const now = performance.now();
+    if (refreshing || now - refreshedAt < 2000) return;
+    refreshing = true;
+    refreshedAt = now;
+    try {
+      const i = await fetchInfo();
+      setInfo(i);
+      const tr = i.time_range;
+      if (tr) {
+        const span = tr.max_timestamp_us - tr.min_timestamp_us;
+        if (span > 0) {
+          totalSpan = span;
+          timeline?.setTotalSpan(span);
+        }
+      }
+    } catch (err) {
+      // A scoped run can be wiped while the page is open; drop the scope so the
+      // next frame loads the union instead of failing forever.
+      if ((err as Error).message.includes("no run:") && currentRunScope()) {
+        clearRunScope();
+        refreshing = false;
+        refreshedAt = 0;
+        window.setTimeout(() => void refreshWindow(), 0);
+        return;
+      }
+      /* the trace may be mid-write; the next frame retries */
+    } finally {
+      refreshing = false;
+    }
+    loadProcs();
+    const v = tlView();
+    requestData(v.begin, v.end || ovSpan());
+  }
+
+  // Follow the tail only when the user is already looking at it: a view parked
+  // in the past must not move under the reader.
+  function atTail(): boolean {
+    const v = tlView();
+    if (v.end === 0) return true;
+    return v.end >= totalSpan * 0.98;
+  }
+
+  function pushRunsToTimeline(list: RunInfo[]) {
+    const base = info()?.time_range?.min_timestamp_us ?? 0;
+    timeline?.setRuns(
+      list.map((r) => ({
+        id: r.id,
+        state: r.state,
+        begin: Math.max(0, r.first_ts - base),
+        end: Math.max(0, r.last_ts - base),
+      })),
+    );
+  }
+
+  function applyRuns(frame: { seq: number; runs: RunInfo[]; watch?: "poll" | "events" }): boolean {
+    setRuns(frame.runs);
+    if (frame.watch) setWatchMode(frame.watch);
+    pushRunsToTimeline(frame.runs);
+    if (frame.seq === runsSeq) return false;
+    runsSeq = frame.seq;
+    return true;
+  }
+
+  function selectRun(id: string) {
+    const p = new URLSearchParams(location.search);
+    if (id) p.set("run", id);
+    else p.delete("run");
+    location.search = p.toString();
+  }
   const [meta, setMeta] = createSignal<VizMetadata | null>(null);
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
@@ -475,6 +695,47 @@ export default function App() {
           </div>
         </section>
       );
+    if (id === "runs")
+      return (
+        <section class="ov-card">
+          <div class="ov-card-head">
+            <h3>Runs</h3>
+            <span class="ov-sub">{runs().length.toLocaleString()} runs</span>
+          </div>
+          <div class="ov-runs">
+            <div class="ov-runs-head">
+              <span>run</span>
+              <span>format</span>
+              <span>state</span>
+              <span class="num">files</span>
+              <span class="num">events</span>
+              <span class="num">bytes</span>
+              <span class="num">span</span>
+            </div>
+            <For
+              each={runs().slice(-OV_RUNS_ROWS).reverse()}
+              fallback={<div class="ov-empty">Waiting for the first trace records</div>}
+            >
+              {(r) => (
+                <button
+                  class="ov-runs-row"
+                  classList={{ active: activeRun() === r.id }}
+                  title={`${r.dir} · ${r.reason}`}
+                  onClick={() => selectRun(r.id === activeRun() ? "" : r.id)}
+                >
+                  <span class="ov-runs-id">{r.id}</span>
+                  <span>{r.format}</span>
+                  <span class={`ov-runs-state ${r.state}`}>{r.state}</span>
+                  <span class="num">{r.files.toLocaleString()}</span>
+                  <span class="num">{r.events.toLocaleString()}</span>
+                  <span class="num">{formatBytes(r.bytes)}</span>
+                  <span class="num">{formatTime(r.last_ts - r.first_ts)}</span>
+                </button>
+              )}
+            </For>
+          </div>
+        </section>
+      );
     if (id === "idle")
       return (
         <section class="ov-card">
@@ -699,6 +960,8 @@ export default function App() {
   const [matchPos, setMatchPos] = createSignal(0);
   const [showHelp, setShowHelp] = createSignal(false);
   const [showGaps, setShowGaps] = createSignal(false);
+  // Impossible timings stay hidden until asked for: they drag the axis by days.
+  const [showMalformed, setShowMalformed] = createSignal(false);
   const [multiRun, setMultiRun] = createSignal(false);
   const [breaks, setBreaks] = createSignal<{ begin: number; end: number }[]>([]);
   const topBreaks = () =>
@@ -1367,6 +1630,7 @@ export default function App() {
       onSelectRange: (t0, t1) => requestSelection(t0, t1),
       onSelectRangeClear: () => clearSelection(),
     });
+    timeline.setHideMalformed(!showMalformed());
     timeline.attachMinimap(minimap);
     timeline.attachCounters(counterCanvas);
     flame = new Flamegraph(flameCanvas, {
@@ -1394,77 +1658,40 @@ export default function App() {
       });
     }
     if (NEEDS_LOAD) return; // no server yet; the load screen is shown instead
+    // Runs come first: the strip must work while the tree is still empty.
+    // A run named in the URL may be gone (tree wiped or a run directory
+    // renamed), so settle the scope against the live list before asking for
+    // window data, which would otherwise 404 with "no run: <id>".
+    const bootRuns = await fetchRuns().catch(() => null);
+    if (bootRuns) {
+      applyRuns(bootRuns);
+      if (currentRunScope() && !bootRuns.runs.some((r) => r.id === currentRunScope())) {
+        clearRunScope();
+      }
+    }
+    stopRuns = openRunsStream((f) => {
+      setRunsFeed("live");
+      const first = info() === null && f.runs.length > 0;
+      if (applyRuns(f) && !first && atTail()) void refreshWindow();
+      if (first) void recoverFromWaiting(); // the trace just appeared
+    });
     setLoading(true); // show activity during the initial info scan, before slices stream
     try {
       const i = await fetchInfo();
       setInfo(i);
-      const tr = i.time_range;
-      const span = tr ? tr.max_timestamp_us - tr.min_timestamp_us : 0;
-      if (span > 0) {
-        totalSpan = span;
-        timeline.setTotalSpan(span);
-        fetchVizBreaks()
-          .then((br) => {
-            setMultiRun(br.multi_run);
-            setTimelapse(false); // offer the toggle, but don't collapse gaps by default
-            setBreaks(br.gaps);
-            timeline?.setBreaks(br.gaps, false);
-          })
-          .catch(() => {});
-        loadOverview();
-      } else {
-        setError("No indexed events with a valid time range were found.");
-        setLoading(false);
-      }
-      // Retry once if empty: the first request may race the summary build.
-      const loadLayers = async (retry: boolean) => {
-        try {
-          const r = await fetchLayers();
-          setFileCounts({ total: r.total_files, io: r.io_files });
-          if (Object.keys(r.layers).length) {
-            LAYER_MAP = r.layers;
-            setLayerCats([...new Set(Object.values(r.layers))].sort());
-          } else if (retry) setTimeout(() => loadLayers(false), 1500);
-        } catch {
-          /* heuristic fallback */
-        }
-      };
-      loadLayers(true);
-      // Fork hierarchy for lane ordering + spawn arrows; best-effort.
-      fetchProcTree()
-        .then((pt) => {
-          timeline?.setProcTree(pt.nodes);
-          setOvProcs(
-            pt.nodes.map((n) => ({
-              pid: n.pid,
-              host: n.host || "",
-              label: n.rank != null && n.rank !== "" ? `rank ${n.rank}` : `proc ${n.pid}`,
-            })),
-          );
-          const hosts = new Map<number, string>();
-          const bytes = new Map<number, number>();
-          const ioBusy = new Map<number, number>();
-          const labels = new Map<string, string>();
-          const ranks = new Map<string, string>();
-          for (const n of pt.nodes) {
-            if (n.host) hosts.set(n.pid, n.host);
-            if (n.bytes) bytes.set(n.pid, n.bytes);
-            if (n.io_busy) ioBusy.set(n.pid, n.io_busy);
-            const hasRank = n.rank != null && n.rank !== "";
-            labels.set(String(n.pid), hasRank ? `rank ${n.rank}` : `proc ${n.pid}`);
-            if (hasRank) ranks.set(String(n.pid), n.rank as string);
-          }
-          timeline?.setHosts(hosts);
-          timeline?.setBytes(bytes);
-          timeline?.setIoBusy(ioBusy);
-          timeline?.setProcessLabels(labels);
-          setProcRank(ranks);
-          setGaps(timeline?.topGaps(15) ?? []); // relabel with resolved ranks
-          loadKpis(new Set(pt.nodes.map((n) => n.pid)).size);
-        })
-        .catch(() => loadKpis(0));
+      await loadTrace(i);
     } catch (err) {
-      setError(`Failed to load /api/info: ${(err as Error).message}`);
+      const msg = (err as Error).message;
+      if (msg.includes("no run:") && currentRunScope()) {
+        clearRunScope();
+        location.reload(); // one reload, and the URL no longer names the run
+        return;
+      }
+      setError(
+        msg.includes("waiting for the first records")
+          ? "Waiting for the first trace records. This page updates by itself."
+          : `Failed to load /api/info: ${msg}`,
+      );
       setLoading(false);
     }
   });
@@ -1493,6 +1720,7 @@ export default function App() {
     flameInflight?.abort();
     anFlameInflight?.abort();
     window.removeEventListener("keydown", onGlobalKey);
+    stopRuns?.();
     timeline?.destroy();
     flame?.destroy();
     bottomFlame?.destroy();
@@ -1640,6 +1868,19 @@ export default function App() {
                 >
                   Gaps
                 </button>
+                <button
+                  type="button"
+                  class="ghost"
+                  classList={{ active: showMalformed() }}
+                  title="show events whose timing is impossible for the process that wrote them"
+                  onClick={() => {
+                    const v = !showMalformed();
+                    setShowMalformed(v);
+                    timeline?.setHideMalformed(!v);
+                  }}
+                >
+                  Bad timing
+                </button>
                 <Show when={multiRun()}>
                   <button
                     type="button"
@@ -1725,6 +1966,109 @@ export default function App() {
                 ?
               </button>
             </header>
+          </Show>
+          <Show when={runs().length > 0}>
+            <div class="runs-bar">
+              <button
+                type="button"
+                class="run-chip"
+                classList={{ active: activeRun() === "" }}
+                onClick={() => selectRun("")}
+              >
+                all runs
+              </button>
+              <For each={pinnedRuns()}>
+                {(r) => (
+                  <button
+                    type="button"
+                    class="run-chip"
+                    classList={{
+                      active: activeRun() === r.id,
+                      live: r.state === "live",
+                      done: r.state === "done",
+                      stalled: r.state === "stalled",
+                    }}
+                    title={`${r.dir} · ${r.format} · ${r.reason} · ${r.files} files`}
+                    onClick={() => selectRun(r.id === activeRun() ? "" : r.id)}
+                  >
+                    <span class="run-state" />
+                    <span class="run-id">{r.id}</span>
+                    <span class="run-meta">
+                      {r.format} · {r.events.toLocaleString()}
+                    </span>
+                  </button>
+                )}
+              </For>
+              <Show when={hiddenRuns() > 0}>
+                <button
+                  type="button"
+                  class="run-chip more"
+                  title="show every run"
+                  onClick={() => setRunPicker(!runPicker())}
+                >
+                  +{hiddenRuns().toLocaleString()} more
+                </button>
+              </Show>
+              <span class="runs-count">{runs().length.toLocaleString()} runs</span>
+              <Show when={runsFeed() === "live"}>
+                <span
+                  class="runs-feed"
+                  title={`live updates on /api/stream, tree watched by ${watchMode()}`}
+                >
+                  live
+                </span>
+              </Show>
+            </div>
+            <Show when={runPicker()}>
+              <div class="runs-picker">
+                <div class="runs-picker-head">
+                  <input
+                    class="runs-filter"
+                    placeholder="filter by id, format, state or path"
+                    value={runFilter()}
+                    onInput={(e) => setRunFilter(e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") setRunPicker(false);
+                    }}
+                  />
+                  <span class="runs-picker-note">
+                    {listedRuns().length.toLocaleString()} of {runs().length.toLocaleString()}
+                  </span>
+                  <button class="ghost sm" onClick={() => setRunPicker(false)}>
+                    x
+                  </button>
+                </div>
+                <div class="runs-list">
+                  <For each={listedRuns()}>
+                    {(r) => (
+                      <button
+                        type="button"
+                        class="runs-row"
+                        classList={{ active: activeRun() === r.id }}
+                        title={r.dir}
+                        onClick={() => {
+                          selectRun(r.id === activeRun() ? "" : r.id);
+                          setRunPicker(false);
+                        }}
+                      >
+                        <span
+                          class="run-state"
+                          classList={{
+                            live: r.state === "live",
+                            done: r.state === "done",
+                            stalled: r.state === "stalled",
+                          }}
+                        />
+                        <span class="runs-row-id">{r.id}</span>
+                        <span class="runs-row-meta">
+                          {r.format} · {r.state} · {r.events.toLocaleString()} events
+                        </span>
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </div>
+            </Show>
           </Show>
 
           <Show when={showHelp()}>
@@ -2536,6 +2880,7 @@ export default function App() {
                   query={composedQuery()}
                   nonce={refreshNonce()}
                   visible={view() === "overview"}
+                  theme={theme()}
                 />
               </div>
               <div class="body" style={{ display: view() === "timeline" ? "flex" : "none" }}>
@@ -2706,6 +3051,12 @@ export default function App() {
                   >
                     {(t) => <SandwichView tree={t()} grouped={flameTreeGrouped()} mode={theme()} />}
                   </Show>
+                </div>
+              </Show>
+
+              <Show when={view() === "provenance"}>
+                <div class="body">
+                  <ProvenanceView mode={theme()} />
                 </div>
               </Show>
 

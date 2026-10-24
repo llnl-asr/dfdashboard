@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable, Optional
 
-from dftracer.utils import DFTUtilsQueryError
+from dftracer.utils import DFTUtilsDuqlError, DFTUtilsParseError, DFTUtilsValueError
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 
@@ -27,7 +27,7 @@ _responses = LRUCache(maxsize=64)
 async def _run(fn: Callable[..., Any], *args: Any) -> Any:
     try:
         return await asyncio.to_thread(fn, *args)
-    except DFTUtilsQueryError as e:
+    except (DFTUtilsDuqlError, DFTUtilsValueError, DFTUtilsParseError) as e:
         raise HTTPException(status_code=400, detail=f"invalid query: {e}") from e
 
 
@@ -178,3 +178,33 @@ async def histogram(
 @router.get("/viz/layers", response_model=Layers)
 async def layers(trace: TraceData = Depends(get_trace)) -> Any:
     return await asyncio.to_thread(trace.layers)
+
+
+@router.get("/viz/columns")
+async def columns(trace: TraceData = Depends(get_trace)) -> dict[str, Any]:
+    names = await asyncio.to_thread(trace.field_names)
+    return {"columns": names, "ready": True}
+
+
+@router.get("/viz/untimed")
+async def untimed(
+    limit: int = Query(200, ge=1, le=5000),
+    offset: int = Query(0, ge=0),
+    duql: Optional[str] = None,
+    trace: TraceData = Depends(get_trace),
+) -> Any:
+    return await _run(trace.untimed, limit, offset, duql)
+
+
+@router.get("/rowset")
+async def rowset(
+    name: str = Query(pattern="^(files|hosts)$"),
+    keys: str = "",
+    trace: TraceData = Depends(get_trace),
+) -> dict[str, dict[str, str]]:
+    """The hash -> name map of one declared row set, optionally only ``keys``."""
+    table = await asyncio.to_thread(lambda: trace.files() if name == "files" else trace.hosts())
+    if keys:
+        wanted = {k for k in keys.split(",") if k}
+        table = {k: v for k, v in table.items() if k in wanted}
+    return {"names": table}

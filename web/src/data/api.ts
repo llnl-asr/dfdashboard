@@ -21,9 +21,75 @@ export type { TimelineBatch };
 // True when the view is scoped to a single trace file.
 export const SINGLE_FILE = CONFIG.file !== "";
 
+// Run scope, either from ?run= in the URL or from a click on a run chip. Every
+// endpoint that takes a scope follows it, so one selection drives the whole view.
+let RUN_SCOPE = new URLSearchParams(location.search).get("run") || "";
+
+export function setRunScope(run: string): void {
+  RUN_SCOPE = run;
+}
+
+export function currentRunScope(): string {
+  return RUN_SCOPE;
+}
+
+// A scoped run can vanish when the tree is wiped or a run directory is renamed.
+// Drop the scope and the URL parameter so the view falls back to all runs
+// instead of asking the server for a run that no longer exists.
+export function clearRunScope(): void {
+  RUN_SCOPE = "";
+  const p = new URLSearchParams(location.search);
+  if (!p.has("run")) return;
+  p.delete("run");
+  const q = p.toString();
+  history.replaceState(null, "", `${location.pathname}${q ? `?${q}` : ""}`);
+}
+
 function withFile(params: URLSearchParams): URLSearchParams {
   if (CONFIG.file) params.set("file", CONFIG.file);
+  if (RUN_SCOPE) params.set("run", RUN_SCOPE);
   return params;
+}
+
+export interface RunInfo {
+  id: string;
+  dir: string;
+  format: "raw" | "compact";
+  state: "live" | "done" | "stalled";
+  reason: "marker" | "end-record" | "verified" | "quiet" | "writing";
+  version: number;
+  files: number;
+  bytes: number;
+  events: number;
+  first_ts: number;
+  last_ts: number;
+}
+
+export interface RunsFrame {
+  root: string;
+  seq: number;
+  runs: RunInfo[];
+  watch?: "poll" | "events";
+}
+
+export function fetchRuns(signal?: AbortSignal): Promise<RunsFrame> {
+  return getJson<RunsFrame>(`/api/runs?${withFile(new URLSearchParams()).toString()}`, signal);
+}
+
+// Server-sent events: one frame per change while the directory tree is watched.
+// Returns a disposer. Resolves to a no-op when EventSource is missing.
+export function openRunsStream(onFrame: (f: RunsFrame) => void): () => void {
+  if (typeof EventSource === "undefined") return () => {};
+  const url = apiUrl("/api/stream");
+  const es = new EventSource(url);
+  es.addEventListener("runs", (ev) => {
+    try {
+      onFrame(JSON.parse((ev as MessageEvent).data) as RunsFrame);
+    } catch {
+      /* a malformed frame must not kill the stream */
+    }
+  });
+  return () => es.close();
 }
 
 // Prefix with the API base (VS Code webview) and append the access token.
@@ -45,17 +111,28 @@ export async function apiRequest(path: string): Promise<{ status: number; body: 
   }
 }
 
+// FastAPI errors arrive as {"detail": "..."}; show the detail, not the JSON.
+function errorText(status: number, statusText: string, body: string): string {
+  try {
+    const parsed = JSON.parse(body) as { detail?: unknown };
+    if (typeof parsed.detail === "string" && parsed.detail) return parsed.detail;
+  } catch {
+    /* not json */
+  }
+  return body || `${status} ${statusText}`;
+}
+
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(apiUrl(url), { signal });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(text || `${res.status} ${res.statusText}`);
+    throw new Error(errorText(res.status, res.statusText, text));
   }
   return (await res.json()) as T;
 }
 
 export function fetchInfo(signal?: AbortSignal): Promise<InfoResponse> {
-  return getJson<InfoResponse>("/api/info", signal);
+  return getJson<InfoResponse>(`/api/info?${withFile(new URLSearchParams()).toString()}`, signal);
 }
 
 export function fetchProcTree(signal?: AbortSignal): Promise<{ nodes: ProcTreeNode[] }> {
@@ -156,6 +233,11 @@ export async function fetchOverviewDensity(
 export interface VizBreaks {
   gaps: { begin: number; end: number }[];
   multi_run: boolean;
+  // Trustworthy timing window from the process start/end records, in
+  // trace-relative us; an event outside it has impossible timing. 0 = unknown.
+  valid_start?: number;
+  valid_end?: number;
+  max_life?: number;
 }
 
 export function fetchVizBreaks(signal?: AbortSignal): Promise<VizBreaks> {
@@ -254,4 +336,92 @@ export function fetchLayers(signal?: AbortSignal): Promise<LayersResponse> {
     `/api/viz/layers?${withFile(new URLSearchParams()).toString()}`,
     signal,
   );
+}
+
+// ---- provenance (/api/prov/graph) ----------------------------------------
+export interface ProvEntity {
+  hash: string;
+  type: string;
+  id: string;
+  store: string;
+  uri: string;
+  pids: number[];
+}
+export interface ProvActivity {
+  aid: string;
+  name: string;
+  activity: string;
+  pid: number;
+  ts: number;
+  dur: number;
+  used: string[];
+  generated: string[];
+  invalidated?: string[];
+  updated?: string[];
+  cat?: string;
+}
+export interface ProvEntityRelation {
+  relation: string;
+  subject: string;
+  object: string;
+}
+export interface ProvFile {
+  fhash: string;
+  path: string;
+  mount: string;
+  rel: string;
+}
+export interface ProvMount {
+  path: string;
+  fstype: string;
+}
+export interface ProvAccess {
+  aid: string;
+  fhash: string;
+  path: string;
+  op: "read" | "write" | "open" | "delete" | "meta";
+  calls: number;
+  bytes: number;
+}
+export interface ProvType {
+  name: string;
+  role: string;
+  description: string;
+}
+export interface ProvGraphResponse {
+  entity_relations?: ProvEntityRelation[];
+  types?: ProvType[];
+  entities: ProvEntity[];
+  activities: ProvActivity[];
+  files?: ProvFile[];
+  mounts?: ProvMount[];
+  accesses?: ProvAccess[];
+  entity_files?: { entity: string; fhash: string; path: string }[];
+  stats: {
+    entities: number;
+    activities: number;
+    entity_records: number;
+    prov_events: number;
+    cont_events: number;
+    dangling_hashes: number;
+    isolated_entities: number;
+    truncated_activities: number;
+    orphan_chunks: number;
+    files?: number;
+    mounts?: number;
+    io_events?: number;
+    io_attributed?: number;
+    files_excluded?: number;
+  };
+}
+
+export function fetchProvGraph(
+  params: { io?: boolean; allFiles?: boolean; mounts?: string },
+  signal?: AbortSignal,
+): Promise<ProvGraphResponse> {
+  const p = new URLSearchParams(withFile(new URLSearchParams()));
+  p.set("io", params.io === false ? "0" : "1");
+  if (params.allFiles) p.set("all_files", "1");
+  if (params.mounts) p.set("mounts", params.mounts);
+  return getJson<ProvGraphResponse>(`/api/prov/graph?${p.toString()}`, signal);
 }

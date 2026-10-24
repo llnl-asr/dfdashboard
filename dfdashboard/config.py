@@ -20,6 +20,13 @@ class Settings(BaseSettings):
 
     preset: Preset = Preset.EMBEDDED
     trace_paths: list[str] = Field(default_factory=list)
+    watch_root: str | None = None  # a tree of runs, rescanned while serving
+    watch_interval_s: float = 2.0
+    settle_s: float = 60.0  # a compact set is done after this much quiet
+    stall_s: float = 300.0  # an unfinished run is called stalled after this quiet
+    done_markers: list[str] = Field(default_factory=list)  # marker files of a finished run
+    io_workers: int | None = None  # blocking threads (filesystem, engine reads)
+    compute_workers: int | None = None  # CPU-bound Python threads
 
     scheduler_address: str | None = None  # None spawns and owns a LocalCluster
     store_url: str | None = None  # None keeps the store in memory

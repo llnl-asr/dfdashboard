@@ -59,6 +59,11 @@ class Stats(BaseModel):
 class Breaks(BaseModel):
     gaps: list[dict[str, Any]]
     multi_run: bool
+    # Trustworthy timing window from the process start/end records, in trace-
+    # relative us; an event outside it is malformed. Zero means unknown.
+    valid_start: int = 0
+    valid_end: int = 0
+    max_life: int = 0
 
 
 class Layers(BaseModel):

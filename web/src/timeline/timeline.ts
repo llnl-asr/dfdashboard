@@ -23,10 +23,26 @@ interface Slice {
   laneIdx: number;
   depth: number;
   sdepth: number; // server-computed containment depth, or -1 (fall back to stacking)
-  count: number; // >1 for aggregated density blocks
+  count: number; // >1 for an aggregated record or an aggregated density block
   total: number; // summed busy time (== dur for individual events)
   density: boolean;
+  aggregated: boolean; // ph=3 record: the events it stands for are gone
 }
+
+export interface RunBand {
+  id: string;
+  state: string;
+  begin: number; // display coords, same space as slice ts
+  end: number;
+}
+
+// Two tints alternate so adjacent bands read as different runs even when they
+// touch on the axis.
+const RUN_TINTS = [
+  { fill: "rgb(96 165 250 / 12%)", line: "rgb(96 165 250 / 55%)", text: "#7cb0f8" },
+  { fill: "rgb(192 132 252 / 12%)", line: "rgb(192 132 252 / 55%)", text: "#c084fc" },
+  { fill: "rgb(45 212 191 / 12%)", line: "rgb(45 212 191 / 55%)", text: "#2dd4bf" },
+];
 
 interface Lane {
   key: string;
@@ -79,11 +95,15 @@ const COL_UTIL = 128; // left edge of the I/O UTIL bar column
 const COL_UTIL_W = 44;
 const COL_OPS = 282; // right edge of the OPS (ops/s) column
 const COL_BYTES = GUTTER - 12; // right edge of the BYTES column
-const RULER_H = 28;
+const RULER_H = 46; // ticks on top, one run-band row underneath
+const BAND_H = 18;
 const ROW_H = 18;
 const LANE_GAP = 6;
 const HOST_GAP = 12; // vertical separation between host groups
 const TWIST_W = 14; // twisty hit-area / indent step per tree level
+// An event longer than the longest process by this factor is impossible, so its
+// timing is malformed (the factor absorbs float slack, not real overruns).
+const MALFORMED_DUR_FACTOR = 1.25;
 const MIN_SPAN = 1; // microseconds
 const LANE_RAMP_STEPS = 16;
 
@@ -123,6 +143,17 @@ export class Timeline {
   private totalSpan = 1;
   private live: Viewport = { begin: 0, end: 1 };
   private target: Viewport = { begin: 0, end: 1 };
+
+  // Impossible timings are hidden by default: an event that starts before any
+  // process began or outlives every process drags the axis by days and hides the
+  // real activity. Sticky, because a windowed fetch may not carry the start/end
+  // records that ground the bounds.
+  private hideMalformed = true;
+  private procMaxLife = 0;
+  private validStart = 0;
+  private validEnd = 0;
+  private hasValidWindow = false;
+  private timeOrigin = 0;
 
   private slices: Slice[] = [];
   private slicesByKey = new Map<string, Slice[]>();
@@ -206,6 +237,7 @@ export class Timeline {
   private nodeStripHoverAt: { host: string; i: number } | null = null;
 
   private gaps: Gap[] = [];
+  private runs: RunBand[] = [];
   private showGaps = false;
   private hoveredGap: Gap | null = null;
   private selectedGap: Gap | null = null;
@@ -296,7 +328,10 @@ export class Timeline {
   setTotalSpan(span: number): void {
     this.realTotal = Math.max(span, MIN_SPAN);
     this.rebuildAxis();
-    this.totalSpan = Math.max(this.toDisplay(this.realTotal), MIN_SPAN);
+    this.totalSpan = Math.max(
+      this.toDisplay(this.realTotal - this.timeOrigin),
+      MIN_SPAN,
+    );
     this.target = { begin: 0, end: this.totalSpan };
     this.live = { begin: 0, end: this.totalSpan };
     this.invalidate();
@@ -316,6 +351,31 @@ export class Timeline {
 
   isTimelapse(): boolean {
     return this.timelapse;
+  }
+
+  isHidingMalformed(): boolean {
+    return this.hideMalformed;
+  }
+
+  // The trustworthy window from the process start/end records. Sticky: a
+  // windowed fetch may not carry those records.
+  setTimingBounds(start: number, end: number, maxLife: number): void {
+    if (!(end > start)) return;
+    this.validStart = start;
+    this.validEnd = end;
+    this.procMaxLife = maxLife;
+    this.hasValidWindow = true;
+    this.timeOrigin = this.hideMalformed ? start : 0;
+    this.setTotalSpan(this.realTotal);
+  }
+
+  setHideMalformed(v: boolean): void {
+    if (this.hideMalformed === v) return;
+    this.hideMalformed = v;
+    this.timeOrigin = v && this.hasValidWindow ? this.validStart : 0;
+    this.setTotalSpan(this.realTotal);
+    this.resetView();
+    this.invalidate();
   }
 
   setTimelapse(on: boolean): void {
@@ -614,7 +674,32 @@ export class Timeline {
     return this.searchIdx + 1;
   }
 
+  // Ground-truth bounds from the per-process start/end records (cat "dftracer",
+  // args.num_events): the earliest any process began and the longest any ran.
+  private timingBounds(events: TraceEvent[]): void {
+    let start = Infinity;
+    let end = -Infinity;
+    let life = 0;
+    for (const ev of events) {
+      const a = ev.args as Record<string, unknown> | undefined;
+      if (ev.cat !== "dftracer" || !a || a.num_events === undefined) continue;
+      const ts = num(ev.ts);
+      const dur = num(ev.dur);
+      if (!Number.isFinite(ts) || !Number.isFinite(dur)) continue;
+      if (ts < start) start = ts;
+      if (ts + dur > end) end = ts + dur;
+      if (dur > life) life = dur;
+    }
+    if (!(life > 0) || !Number.isFinite(start)) return;
+    this.procMaxLife = Math.max(this.procMaxLife, life);
+    this.validStart = this.hasValidWindow ? Math.min(this.validStart, start) : start;
+    this.validEnd = this.hasValidWindow ? Math.max(this.validEnd, end) : end;
+    this.hasValidWindow = this.validEnd > this.validStart;
+    this.timeOrigin = this.hideMalformed && this.hasValidWindow ? this.validStart : 0;
+  }
+
   setData(events: TraceEvent[], density: DensityBlock[] = []): void {
+    this.timingBounds(events);
     const byLane = new Map<string, Slice[]>();
     const push = (key: string, s: Slice) => {
       let arr = byLane.get(key);
@@ -629,16 +714,19 @@ export class Timeline {
       const ts = num(ev.ts);
       const dur = num(ev.dur);
       if (!Number.isFinite(ts) || dur < 0) continue;
+      if (this.hideMalformed && this.isMalformed(ts, dur, ev.agg === true)) continue;
+      const agg = ev.agg === true;
       push(`${ev.pid}/${ev.tid}`, {
         ev,
-        ts,
+        ts: ts - this.timeOrigin,
         dur,
         laneIdx: 0,
         depth: 0,
         sdepth: typeof ev.depth === "number" ? ev.depth : -1,
-        count: 1,
-        total: dur,
+        count: agg && Number(ev.count) > 0 ? Number(ev.count) : 1,
+        total: agg && Number.isFinite(Number(ev.total)) ? Number(ev.total) : dur,
         density: false,
+        aggregated: agg,
       });
     }
     // Aggregated density blocks render as slices too.
@@ -658,7 +746,7 @@ export class Timeline {
       } as unknown as TraceEvent;
       push(`${b.pid}/${b.tid}`, {
         ev: synthetic,
-        ts: b.ts,
+        ts: b.ts - this.timeOrigin,
         dur: b.dur,
         laneIdx: 0,
         depth: 0,
@@ -666,6 +754,7 @@ export class Timeline {
         count: b.count,
         total: b.total,
         density: true,
+        aggregated: true,
       });
     }
 
@@ -674,6 +763,14 @@ export class Timeline {
     for (const k of byLane.keys()) this.laneRegistry.add(k);
     this.slicesByKey = byLane;
     this.layoutLanes();
+  }
+
+  // A duration longer than any process, or a start before the earliest one
+  // (minus one process lifetime of slack), is physically impossible.
+  private isMalformed(ts: number, dur: number, agg: boolean): boolean {
+    if (!this.hasValidWindow) return false;
+    if (!agg && dur > this.procMaxLife * MALFORMED_DUR_FACTOR) return true;
+    return ts < this.validStart - this.procMaxLife;
   }
 
   // Merge, never replace: the per-window HH scan is empty at full view and
@@ -960,7 +1057,7 @@ export class Timeline {
       const d = s.density ? (s.count ? s.total / s.count : 0) : s.dur;
       return d > 0 ? this.ramp(norm(Math.log(d), this.durDomain), "lat") : NEUTRAL;
     }
-    if (s.density) return NEUTRAL; // per-event bytes are not available once aggregated
+    if (s.density || s.aggregated) return NEUTRAL; // no per-event bytes here
     const r = this.retOf(s);
     return r != null && r > 0 ? this.ramp(norm(Math.log(r), this.sizeDomain), "size") : NEUTRAL;
   }
@@ -1046,8 +1143,10 @@ export class Timeline {
     if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) return;
     const k = e.key.toLowerCase();
     if (NAV_KEYS.has(k)) {
+      const fresh = !this.keys.has(k);
       this.keys.add(k);
       e.preventDefault();
+      if (fresh) this.applyKeys(); // a tap must move, not just a held key
       this.requestFrame(); // start the animation loop while keys are held
     }
   };
@@ -2049,6 +2148,7 @@ export class Timeline {
     this.renderBreaks(ctx);
     this.renderSelection(ctx);
     this.renderRuler(ctx);
+    this.renderRuns(ctx);
     this.renderGutter(ctx);
     this.renderCrosshair(ctx);
 
@@ -2346,6 +2446,68 @@ export class Timeline {
     ctx.restore();
   }
 
+  setRuns(runs: RunBand[]): void {
+    const same =
+      this.runs.length === runs.length &&
+      this.runs.every((r, i) => {
+        const n = runs[i];
+        return r.id === n.id && r.state === n.state && r.begin === n.begin && r.end === n.end;
+      });
+    if (same) return;
+    this.runs = runs;
+    this.invalidate();
+  }
+
+  // One band per run across the ruler foot, in band order: the run identity is
+  // a directory, so a boundary is exact rather than a guess from dead time.
+  private renderRuns(ctx: CanvasRenderingContext2D): void {
+    if (this.runs.length === 0) return;
+    const y = RULER_H - BAND_H + 2;
+    const h = BAND_H - 4;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(GUTTER, y - 2, this.cssW - GUTTER, BAND_H);
+    ctx.clip();
+    ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
+    ctx.textBaseline = "middle";
+    this.runs.forEach((r, i) => {
+      const x0 = Math.max(GUTTER, this.xOf(r.begin));
+      const x1 = Math.min(this.cssW, this.xOf(r.end));
+      if (x1 <= GUTTER || x0 >= this.cssW || x1 - x0 < 1) return;
+      const tint = RUN_TINTS[i % RUN_TINTS.length];
+      ctx.fillStyle = tint.fill;
+      ctx.fillRect(x0, y, x1 - x0, h);
+      ctx.strokeStyle = tint.line;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x0 + 0.5, y + 0.5, Math.max(1, x1 - x0 - 1), h - 1);
+      // A start boundary through the lanes, so the run edge is visible while
+      // panning without reading the band label.
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.moveTo(Math.round(x0) + 0.5, y + h);
+      ctx.lineTo(Math.round(x0) + 0.5, this.cssH);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const dot = r.state === "live" ? "#48b96b" : r.state === "stalled" ? "#c9a227" : null;
+      let tx = x0 + 6;
+      if (dot) {
+        ctx.fillStyle = dot;
+        ctx.beginPath();
+        ctx.arc(tx + 2.5, y + h / 2, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+        tx += 10;
+      }
+      ctx.fillStyle = tint.text;
+      const room = x1 - tx - 6;
+      if (room > 20) {
+        let label = r.id;
+        while (label.length > 4 && ctx.measureText(label).width > room) label = label.slice(0, -1);
+        ctx.fillText(label.length < r.id.length ? label + "…" : label, tx, y + h / 2);
+      }
+    });
+    ctx.restore();
+  }
+
   private renderRuler(ctx: CanvasRenderingContext2D): void {
     ctx.fillStyle = this.th.plotBg;
     ctx.fillRect(0, 0, this.cssW, RULER_H);
@@ -2360,16 +2522,18 @@ export class Timeline {
     ctx.fillStyle = this.th.ruler;
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
-    ctx.fillText("TRACK", 12, RULER_H / 2);
-    ctx.fillText("I/O UTIL", COL_UTIL, RULER_H / 2);
+    const headY = (RULER_H - BAND_H) / 2;
+    ctx.fillText("TRACK", 12, headY);
+    ctx.fillText("I/O UTIL", COL_UTIL, headY);
     ctx.textAlign = "right";
-    ctx.fillText("OPS", COL_OPS, RULER_H / 2);
-    ctx.fillText("BYTES", COL_BYTES, RULER_H / 2);
+    ctx.fillText("OPS", COL_OPS, headY);
+    ctx.fillText("BYTES", COL_BYTES, headY);
     ctx.textAlign = "left";
 
     const span = this.live.end - this.live.begin;
     const pw = this.plotW();
     const { step, first } = this.timeTicks();
+    const tickH = RULER_H - BAND_H;
     ctx.fillStyle = this.th.laneText;
     ctx.font = "10px ui-monospace, SFMono-Regular, Menlo, monospace";
     ctx.textBaseline = "middle";
@@ -2379,10 +2543,10 @@ export class Timeline {
       // gridline drawn behind the slices.
       ctx.strokeStyle = this.th.divider;
       ctx.beginPath();
-      ctx.moveTo(x + 0.5, RULER_H - 6);
-      ctx.lineTo(x + 0.5, RULER_H);
+      ctx.moveTo(x + 0.5, tickH - 6);
+      ctx.lineTo(x + 0.5, tickH);
       ctx.stroke();
-      ctx.fillText(formatTick(this.toReal(t), step), x + 3, RULER_H / 2);
+      ctx.fillText(formatTick(this.toReal(t), step), x + 3, tickH / 2);
     }
   }
 

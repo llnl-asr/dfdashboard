@@ -7,7 +7,6 @@ session into a plain <div>. embed_script() returns that script.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from pathlib import Path
 from typing import Any
@@ -24,11 +23,12 @@ from bokeh.plotting import figure
 from bokeh.util.token import generate_jwt_token, generate_session_id
 from bokeh_fastapi import BokehFastAPI
 from fastapi import FastAPI, Request, Response
-from panel.io.fastapi import build_applications
+from panel.io.application import build_applications
 from tornado.httputil import HTTPHeaders, HTTPServerRequest
 from tornado.ioloop import IOLoop
 
 from .cards import CARDS_PATH, build_cards_app
+from .docloop import spawn
 
 pn.extension("tabulator", inline=True)
 
@@ -238,7 +238,7 @@ def _tile(label: str, value: str) -> Any:
     )
 
 
-def _bandwidth_view(task_id: str, events: Any, doc: Any) -> Any:
+def _bandwidth_view(app: FastAPI, task_id: str, events: Any, doc: Any) -> Any:
     src = ColumnDataSource({"x": [], "read": [], "write": []})
     p = figure(
         height=380,
@@ -268,8 +268,8 @@ def _bandwidth_view(task_id: str, events: Any, doc: Any) -> Any:
                     )
                 )
 
-        job = asyncio.ensure_future(pump())
-        pn.state.on_session_destroyed(lambda _c: job.cancel())  # ty: ignore[invalid-argument-type]
+        job = spawn(app, pump())
+        pn.state.on_session_destroyed(lambda _c: job.cancel())
 
     return pn.pane.Bokeh(p, sizing_mode="stretch_width")
 
@@ -376,7 +376,7 @@ def _make_app(app: FastAPI):
         rec = backend.get(task_id) if (backend and task_id) else None
 
         if rec is not None and rec.spec.pipeline_id == "bandwidth_scan":
-            return _bandwidth_view(task_id, events, doc)
+            return _bandwidth_view(app, task_id, events, doc)
 
         container = pn.Column(sizing_mode="stretch_width")
         if rec is None or backend is None:
@@ -402,8 +402,8 @@ def _make_app(app: FastAPI):
                             doc.add_next_tick_callback(render)
                             break
 
-                job = asyncio.ensure_future(watch())
-                pn.state.on_session_destroyed(lambda _c: job.cancel())  # ty: ignore[invalid-argument-type]
+                job = spawn(app, watch())
+                pn.state.on_session_destroyed(lambda _c: job.cancel())
         return container
 
     return make_app
@@ -442,7 +442,7 @@ async def _new_session(server: BokehFastAPI, app_path: str, request: Request) ->
         extra_payload=payload,
     )
     if ctx.io_loop is None:
-        ctx._loop = IOLoop.current()
+        ctx._loop = IOLoop.current()  # ty: ignore[invalid-assignment]  bokeh types it as a plain loop
     return await ctx.create_session_if_needed(session_id, treq, token)
 
 
@@ -507,8 +507,10 @@ def embed_script(task: str = "") -> str:
     return server_document(_APP_PATH, relative_urls=True, arguments=args)
 
 
-def cards_embed_script(cards: list[str], begin: str = "", end: str = "", query: str = "") -> str:
-    args = {"cards": ",".join(cards)}
+def cards_embed_script(
+    cards: list[str], begin: str = "", end: str = "", query: str = "", theme: str = "dark"
+) -> str:
+    args = {"cards": ",".join(cards), "theme": theme}
     if begin:
         args["begin"] = begin
     if end:

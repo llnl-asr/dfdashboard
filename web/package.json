@@ -19,12 +19,15 @@
     "@solidjs/router": "^0.14.10",
     "@uwdata/flechette": "^2.5.0",
     "apache-arrow": "^18.0.0",
+    "cytoscape": "3.30.2",
+    "cytoscape-dagre": "2.5.0",
     "fzstd": "^0.1.1",
     "solid-js": "^1.9.3"
   },
   "devDependencies": {
     "@anywidget/types": "^0.4.0",
     "@eslint/js": "^9.13.0",
+    "@types/cytoscape": "3.21.9",
     "@types/node": "^20.16.0",
     "eslint": "^9.13.0",
     "eslint-plugin-solid": "^0.14.5",

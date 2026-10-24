@@ -38,5 +38,6 @@ $PODMAN run --rm --user 0:0 -v "$PWD:/ws" -w /ws "${PIP_ENV[@]}" -e SUITE="$SUIT
 $PODMAN run --rm --user 0:0 -v "$PWD:/ws" -w /ws "${PIP_ENV[@]}" docker.io/library/python:3.12 bash -ec '
   pip install --quiet --upgrade pip
   pip install --quiet -r docs/requirements.txt
-  sphinx-build -b html docs public
+  # -W fails on a warning, -n also fails on an unresolved reference.
+  sphinx-build -b html -E -W --keep-going -n docs public
 '

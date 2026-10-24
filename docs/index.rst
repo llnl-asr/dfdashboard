@@ -10,4 +10,5 @@ backed by the dftracer-utils C++ index so it stays responsive on large traces.
    :caption: Contents:
 
    introduction
+   runs
    api

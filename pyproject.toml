@@ -9,36 +9,45 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-  "panel>=1.5",
-  "hvplot>=0.11",
-  "holoviews>=1.20",
-  "bokeh>=3.7",
-  "bokeh-fastapi>=0.1",
-  "dask[distributed]>=2025.5",
-  "fastapi>=0.115",
-  "uvicorn[standard]>=0.30",
-  "starlette-compress>=1",
-  "pydantic>=2.7",
-  "pydantic-settings>=2.3",
-  "pyarrow>=17",
-  "polars>=1.0",
-  "numpy>=2",
-  "numba>=0.60",
-  "reactivex>=4",
+  "panel>=1.10",
+  "hvplot>=0.12",
+  "holoviews>=1.23",
+  "bokeh>=3.10",
+  "bokeh-fastapi>=0.1.8",
+  "fastapi>=0.162",
+  "uvicorn[standard]>=0.54",
+  "starlette-compress>=1.8",
+  "pydantic>=2.14",
+  "pydantic-settings>=2.16",
+  "pyarrow>=26",
+  "numpy>=2.5",
+  "numba>=0.68",
+  "reactivex>=6",
+  # dftracer-analyzer pins rich~=14.1.0, so 14 is the highest floor that resolves.
   "rich>=14",
-  "dftracer-utils>=0.0.11",
-  "dftracer-analyzer>=0.0.9",
+  # .dev0 floors opt these two into the develop-branch prerelease wheels and
+  # still accept later finals (a floor carrying a prerelease segment is what
+  # makes pip and uv resolve prereleases for that requirement).
+  "dftracer-utils>=0.0.14.dev0",
+  "dftracer-analyzer>=0.0.9.post61.dev0",
 ]
 
 
 [project.optional-dependencies]
-scale = ["datashader>=0.16"]
-builder = ["panel-graphic-walker>=0.6"]
-mcp = ["fastmcp>=2"]
-export = ["weasyprint>=62", "playwright>=1.45"]
+scale = ["datashader>=0.19", "dask[distributed]>=2026.8"]
+builder = ["panel-graphic-walker>=0.6.5"]
+mcp = ["fastmcp>=4"]
+export = ["weasyprint>=70", "playwright>=1.64"]
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-asyncio>=0.24", "httpx>=0.27", "ruff>=0.12", "ty", "pre-commit>=3.7"]
+dev = [
+  "pytest>=9",
+  "pytest-asyncio>=1.4",
+  "httpx>=0.28",
+  "ruff>=0.17",
+  "ty>=0.0.91",
+  "pre-commit>=4.7",
+]
 
 [project.scripts]
 dfdashboard-serve = "dfdashboard.cli:main"

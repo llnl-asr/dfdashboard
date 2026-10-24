@@ -19,16 +19,16 @@ def set_worker_trace(trace: Any) -> None:
 
 
 def _trace_for(index_dir: str, files: Optional[list[str]]) -> Any:
-    if _TRACE is not None:
+    if _TRACE is not None and (not files or list(_TRACE.paths) == files):
         return _TRACE
     if not index_dir or not files:
         raise RuntimeError("no worker trace registered and no index to rebuild from")
     key = index_dir + "|" + ",".join(files)
     trace = _REBUILT.get(key)
     if trace is None:
-        from ..data.trace import TraceData
+        from ..data.trace import trace_data
 
-        trace = TraceData(files, index_dir=index_dir)
+        trace = trace_data(files, index_dir=index_dir)
         _REBUILT[key] = trace
     return trace
 
@@ -46,6 +46,8 @@ def dispatch_op(
         return trace.size_histogram(begin, end, query, nbuckets)
     if op == "access_pattern":
         return trace.access_pattern(begin, end, query)
+    if op == "proc_bytes":
+        return trace.proc_bytes(begin, end, query)
     raise ValueError(f"unknown card op: {op}")
 
 

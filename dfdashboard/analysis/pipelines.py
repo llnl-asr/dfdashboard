@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
-import json
+import logging
 import os
-import sys
 import tempfile
 from collections import defaultdict
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
 from .base import Pipeline, Result, RunContext, register_pipeline
+
+log = logging.getLogger(__name__)
 
 
 class IOSummaryParams(BaseModel):
@@ -23,30 +25,28 @@ class IOSummaryParams(BaseModel):
 class IOSummaryPipeline(Pipeline):
     id = "io_summary"
     label = "I/O bytes by host"
-    description = "Total read/written bytes per node, aggregated on the cluster."
+    description = "Total read/written bytes per node."
     Params = IOSummaryParams
 
     async def run(self, ctx: RunContext, params: BaseModel) -> Result:
-        ctx.progress(0.1, "reading process tree")
+        if ctx.data is None:
+            raise ValueError("no trace loaded")
+        ctx.progress(0.2, "reading process tree")
         nodes = await asyncio.to_thread(ctx.data.proctree)
-        by_host: dict[str, list[int]] = defaultdict(list)
+        by_host: dict[str, int] = defaultdict(int)
         for n in nodes["nodes"]:
-            by_host[n["host"] or "unknown"].append(n["bytes"])
-
-        ctx.progress(0.4, "starting cluster")
-        client = await ctx.get_client()
-
-        ctx.progress(0.6, "aggregating")
-        futures = {h: client.submit(lambda v: int(sum(v)), vals) for h, vals in by_host.items()}
-        result = {h: await f for h, f in futures.items()}
-
+            by_host[n["host"] or "unknown"] += int(n["bytes"])
         ctx.progress(1.0, "done")
-        return Result(data={"bytes_by_host": result}, meta={"hosts": len(result)})
+        return Result(data={"bytes_by_host": dict(by_host)}, meta={"hosts": len(by_host)})
 
 
 class DFAnalyzerParams(BaseModel):
     trace_path: Optional[str] = None  # defaults to the loaded trace's directory
     time_granularity: float = 1.0
+    # "none" analyzes in this process with no Dask. "external" runs the scan
+    # on the dashboard's own threads-only cluster, which still needs no child
+    # process and no signal handlers.
+    cluster: Literal["none", "external"] = "none"
 
 
 class DFAnalyzerPipeline(Pipeline):
@@ -60,25 +60,24 @@ class DFAnalyzerPipeline(Pipeline):
         trace_path = params.trace_path or (ctx.data.trace_dir if ctx.data else "")
         if not trace_path:
             raise ValueError("no trace_path and no loaded trace")
+        trace_path = os.path.abspath(trace_path)
+        out_dir = _dfa_dir(trace_path)
 
-        out_dir = tempfile.mkdtemp(prefix="dfa-")
         ctx.progress(0.1, "starting analyzer")
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "dfdashboard.analysis._dfa_worker",
-            trace_path,
-            str(params.time_granularity),
-            out_dir,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
+        from ._dfa import analyze, warmup
+
+        if not warmup():
+            raise RuntimeError(
+                "dfanalyzer must be imported from the main thread; the server does this at startup"
+            )
+        address = ""
+        if params.cluster == "external":
+            client = await ctx.get_client()
+            address = client.scheduler.address
+        res = await asyncio.to_thread(
+            analyze, trace_path, params.time_granularity, out_dir, params.cluster, address
         )
-        ctx.progress(0.4, "analyzing trace")
-        _stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            raise RuntimeError(f"dfanalyzer failed: {stderr.decode()[-800:]}")
-        with open(os.path.join(out_dir, "result.json")) as f:
-            res = json.load(f)
+
         ctx.progress(1.0, "done")
         mv = os.path.join(out_dir, "main_view.parquet")
         res["main_view_path"] = mv if os.path.exists(mv) else ""
@@ -86,6 +85,14 @@ class DFAnalyzerPipeline(Pipeline):
             data=res,
             meta={"facts": len(res.get("facts") or []), "rows": len(res.get("columns") or [])},
         )
+
+
+def _dfa_dir(trace_path: str) -> str:
+    """A stable output directory per trace, so re-runs reuse it."""
+    digest = hashlib.sha1(trace_path.encode()).hexdigest()[:16]
+    path = os.path.join(tempfile.gettempdir(), "dfdashboard-dfa", digest)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 class BandwidthScanParams(BaseModel):
@@ -121,7 +128,7 @@ class BandwidthScanPipeline(Pipeline):
 
 
 class CardComputeParams(BaseModel):
-    op: str  # op_stats | counters | histogram | size_histogram | access_pattern
+    op: str  # op_stats | counters | histogram | size_histogram | access_pattern | proc_bytes
     begin: float = 0.0
     end: float = 0.0  # <=0 means the full trace span
     query: Optional[str] = None
@@ -152,7 +159,11 @@ class CardComputePipeline(Pipeline):
             end = float(info.global_max_ts - info.global_min_ts)
         begin, q = params.begin, params.query or None
 
-        if params.use_dask:
+        use_dask = params.use_dask and importlib.util.find_spec("distributed") is not None
+        if params.use_dask and not use_dask:
+            log.warning("distributed is not installed; %s runs locally", params.op)
+
+        if use_dask:
             ctx.progress(0.4, "dispatching to cluster")
             client = await ctx.get_client()
             fut = client.submit(
