@@ -26,13 +26,13 @@ DFDashboard requires Python 3.12 or newer.
 
 .. code-block:: bash
 
-   pip install git+https://github.com/LLNL/DFDashboard.git@main
+   pip install git+https://github.com/llnl-asr/dfdashboard.git@main
 
 or from a local checkout:
 
 .. code-block:: bash
 
-   git clone https://github.com/LLNL/DFDashboard.git
+   git clone https://github.com/llnl-asr/dfdashboard.git
    cd DFDashboard
    pip install -e .
 
