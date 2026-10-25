@@ -32,7 +32,7 @@ default, or an external scheduler in service mode.
 Installation
 ------------
 
-DFDashboard requires Python 3.12 or newer. ``dftracer-utils`` (the trace index
+DFDashboard requires Python 3.10 or newer. ``dftracer-utils`` (the trace index
 bindings) is a core dependency and installs automatically.
 It follows the develop-branch prereleases, so ``pyproject.toml`` asks for it with
 a ``.dev0`` version floor.

@@ -3,8 +3,13 @@
 import gzip
 import json
 import os
+import threading
+import time
+from contextlib import contextmanager
 
+import httpx
 import pytest
+import uvicorn
 
 pytest.importorskip("dftracer.utils")
 
@@ -21,6 +26,27 @@ from dftracer.dashboard.server import create_app  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 BASE = 1_000_000
+
+
+@contextmanager
+def served(app):
+    """A real server on a free port.
+
+    The server-sent events endpoint never ends, and the test client buffers a
+    whole response before it hands one back (starlette 1.7, the newest that
+    runs on 3.10), so the stream is read over a socket instead.
+    """
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    while not server.started:
+        time.sleep(0.01)
+    port = server.servers[0].sockets[0].getsockname()[1]
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(5)
 
 
 def _records(pid: int = 1, n: int = 4, end: bool = True) -> list[dict]:
@@ -275,15 +301,21 @@ def test_runs_api_and_stream(tmp_path):
         assert info["file_count"] == 1
         assert c.get("/api/info?run=nope").status_code == 404
 
-        with c.stream("GET", "/api/stream") as resp:
+
+def test_stream_sends_runs_frames(tmp_path):
+    root = tmp_path / "runs"
+    _write(str(root / "run1" / "raw" / "a.pfw.gz"), _records(pid=1))
+    settings = Settings(watch_root=str(root), index_dir=str(tmp_path / "idx"))
+    with served(create_app(settings)) as base:
+        with httpx.stream("GET", f"{base}/api/stream", timeout=15) as resp:
             assert resp.status_code == 200
             lines = []
             for line in resp.iter_lines():
                 lines.append(line)
                 if len(lines) >= 2:
                     break
-        assert lines[0] == "event: runs"
-        assert json.loads(lines[1][len("data: ") :])["runs"]
+    assert lines[0] == "event: runs"
+    assert json.loads(lines[1][len("data: ") :])["runs"]
 
 
 def test_marker_file_marks_a_compact_set_done(tmp_path):

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dftracer.utils import Runtime
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette_compress import CompressMiddleware
 
@@ -197,9 +197,13 @@ def create_app(settings: Settings) -> FastAPI:
         if (dist / "assets").is_dir():
             app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
-        # Registered last so /api and /assets win first.
+        # Registered last so /api and /assets win first. An unknown API path is a
+        # 404 in JSON: handing the SPA's index.html to a JSON client hides the
+        # mistake behind a parse error.
         @app.get("/{path:path}")
-        async def spa(path: str) -> FileResponse:
+        async def spa(path: str) -> Response:
+            if path.startswith("api/"):
+                return JSONResponse({"detail": "not found"}, status_code=404)
             f = dist / path
             if path and f.is_file():
                 return FileResponse(f)

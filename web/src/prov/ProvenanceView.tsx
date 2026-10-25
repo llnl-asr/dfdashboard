@@ -767,16 +767,7 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string })
 
   // Perfetto-style navigation with the same keys the timeline uses: A/D pan,
   // W/S zoom at the pointer, arrows as aliases. Held keys repeat per frame.
-  const NAV_KEYS = new Set([
-    "w",
-    "a",
-    "s",
-    "d",
-    "arrowleft",
-    "arrowright",
-    "arrowup",
-    "arrowdown",
-  ]);
+  const NAV_KEYS = new Set(["w", "a", "s", "d", "arrowleft", "arrowright", "arrowup", "arrowdown"]);
   const keys = new Set<string>();
   let pointer = { x: 0, y: 0 };
   let navFrame = 0;
@@ -807,7 +798,8 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string })
   };
 
   const isEditable = (t: EventTarget | null) =>
-    t instanceof HTMLElement && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName));
+    t instanceof HTMLElement &&
+    (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName));
 
   const onNavDown = (e: KeyboardEvent) => {
     const k = e.key.toLowerCase();

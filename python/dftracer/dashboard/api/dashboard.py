@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import json
 import os
-from typing import TypedDict
 
 from fastapi import APIRouter, Depends
+from typing_extensions import TypedDict
 
 from ..core.errors import UNKNOWN_DASHBOARD, ApiError
 from .deps import get_index_dir

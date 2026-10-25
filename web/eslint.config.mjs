@@ -13,7 +13,9 @@ export default tseslint.config(
       parserOptions: { project: "./tsconfig.json" },
     },
     rules: {
-      "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+      // The web code carries no any. Keep it that way.
+      "@typescript-eslint/no-explicit-any": "error",
     },
   },
 );

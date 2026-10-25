@@ -328,10 +328,7 @@ export class Timeline {
   setTotalSpan(span: number): void {
     this.realTotal = Math.max(span, MIN_SPAN);
     this.rebuildAxis();
-    this.totalSpan = Math.max(
-      this.toDisplay(this.realTotal - this.timeOrigin),
-      MIN_SPAN,
-    );
+    this.totalSpan = Math.max(this.toDisplay(this.realTotal - this.timeOrigin), MIN_SPAN);
     this.target = { begin: 0, end: this.totalSpan };
     this.live = { begin: 0, end: this.totalSpan };
     this.invalidate();

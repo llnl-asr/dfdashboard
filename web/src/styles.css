@@ -3073,3 +3073,10 @@ html.api-page #root {
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+
+/* A code-split view paints this while its chunk arrives. */
+.view-loading {
+  padding: 24px;
+  color: var(--muted);
+  font: 12px var(--mono);
+}

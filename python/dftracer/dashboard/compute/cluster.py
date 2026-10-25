@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
-from typing import TYPE_CHECKING, Optional, TypedDict, cast
+from typing import TYPE_CHECKING, Optional, cast
+
+from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     from distributed import Client, LocalCluster

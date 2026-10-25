@@ -6,12 +6,13 @@ no state; the facade stays the only owner of the viewers."""
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import TYPE_CHECKING, NotRequired, Optional, TypedDict
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 import pyarrow as pa
 from dftracer.utils import DataFrame
 from dftracer.utils.columnar import F, count
+from typing_extensions import NotRequired, TypedDict
 
 from .frame import (
     Row,

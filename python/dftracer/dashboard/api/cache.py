@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Awaitable, Callable, Hashable, cast
+from typing import Awaitable, Callable, Hashable, TypeVar, cast
+
+T = TypeVar("T")
 
 
 class LRUCache:
@@ -11,7 +13,7 @@ class LRUCache:
         self._store: OrderedDict[Hashable, object] = OrderedDict()
         self._max = maxsize
 
-    async def get_or_set[T](self, key: Hashable, factory: Callable[[], Awaitable[T]]) -> T:
+    async def get_or_set(self, key: Hashable, factory: Callable[[], Awaitable[T]]) -> T:
         hit = self._store.get(key)
         if hit is not None:
             self._store.move_to_end(key)

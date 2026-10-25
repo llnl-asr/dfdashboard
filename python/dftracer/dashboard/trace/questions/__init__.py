@@ -13,13 +13,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, ClassVar, Literal, Optional, Protocol
+from typing import TYPE_CHECKING, ClassVar, Generic, Literal, Optional, Protocol, TypeVar
 
 if TYPE_CHECKING:
     from dftracer.utils import DataFrame, TraceViewer
     from dftracer.utils.columnar import Expr
 
     from ...data.metadata import TraceMeta
+
+
+P = TypeVar("P")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +47,7 @@ class Context(Protocol):
     def gap_limits(self) -> tuple[int, float, int]: ...
 
 
-class Question[P](ABC):
+class Question(ABC, Generic[P]):
     """A plan plus the pure function that turns its frame into a payload."""
 
     __slots__ = ()

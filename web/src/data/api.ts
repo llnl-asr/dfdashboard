@@ -11,8 +11,6 @@ import type {
   VizResponse,
 } from "./types";
 
-import { RecordBatchReader, tableFromIPC } from "apache-arrow";
-
 import { CONFIG } from "./config";
 import { splitSlices, type TimelineBatch } from "../timeline/slices";
 
@@ -51,7 +49,10 @@ export interface RunsFrame {
 }
 
 export function fetchRuns(scope: string, signal?: AbortSignal): Promise<RunsFrame> {
-  return getJson<RunsFrame>(`/api/runs?${withScope(new URLSearchParams(), scope).toString()}`, signal);
+  return getJson<RunsFrame>(
+    `/api/runs?${withScope(new URLSearchParams(), scope).toString()}`,
+    signal,
+  );
 }
 
 // Server-sent events: one frame per change while the directory tree is watched.
@@ -126,15 +127,27 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
 }
 
 export function fetchInfo(scope: string, signal?: AbortSignal): Promise<InfoResponse> {
-  return getJson<InfoResponse>(`/api/info?${withScope(new URLSearchParams(), scope).toString()}`, signal);
+  return getJson<InfoResponse>(
+    `/api/info?${withScope(new URLSearchParams(), scope).toString()}`,
+    signal,
+  );
 }
 
-export function fetchProcTree(scope: string, signal?: AbortSignal): Promise<{ nodes: ProcTreeNode[] }> {
+export function fetchProcTree(
+  scope: string,
+  signal?: AbortSignal,
+): Promise<{ nodes: ProcTreeNode[] }> {
   const params = new URLSearchParams();
   return getJson<{ nodes: ProcTreeNode[] }>(
     `/api/viz/proctree?${withScope(params, scope).toString()}`,
     signal,
   );
+}
+
+// The Arrow decoders are imported where they are used, so the entry chunk does
+// not carry apache-arrow for a reader who never opens the timeline.
+async function arrow() {
+  return await import("./arrow");
 }
 
 // Events ride Arrow IPC. apache-arrow decodes int64 columns as BigInt, so
@@ -145,6 +158,7 @@ async function getArrowEvents(url: string, signal?: AbortSignal): Promise<TraceE
     const text = await res.text().catch(() => "");
     throw new Error(text || `${res.status} ${res.statusText}`);
   }
+  const { tableFromIPC } = await arrow();
   const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
   return table.toArray().map((r): TraceEvent => {
     const o = r as Record<string, unknown>;
@@ -170,7 +184,10 @@ export async function fetchViz(
     end: String(Math.ceil(q.end)),
   });
   if (q.query && q.query.trim()) params.set("query", q.query.trim());
-  const events = await getArrowEvents(`/api/viz/events.arrow?${withScope(params, scope).toString()}`, signal);
+  const events = await getArrowEvents(
+    `/api/viz/events.arrow?${withScope(params, scope).toString()}`,
+    signal,
+  );
   return {
     events,
     metadata: {
@@ -199,13 +216,17 @@ export async function fetchTimelineStream(
   if (q.query && q.query.trim()) params.set("query", q.query.trim());
   if (q.lookback && q.lookback > 0) params.set("lookback", String(Math.ceil(q.lookback)));
   if (q.width && q.width > 0) params.set("width", String(Math.round(q.width)));
-  const res = await fetch(apiUrl(`/api/viz/timeline.arrow?${withScope(params, scope).toString()}`), {
-    signal,
-  });
+  const res = await fetch(
+    apiUrl(`/api/viz/timeline.arrow?${withScope(params, scope).toString()}`),
+    {
+      signal,
+    },
+  );
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => "");
     throw new Error(text || `${res.status} ${res.statusText}`);
   }
+  const { RecordBatchReader } = await arrow();
   const reader = await RecordBatchReader.from(res.body);
   for await (const batch of reader) {
     if (signal?.aborted) break;
@@ -260,13 +281,17 @@ export async function fetchVizCounters(
     buckets: String(buckets),
   });
   if (query && query.trim()) params.set("query", query.trim());
-  const res = await fetch(apiUrl(`/api/viz/counters.arrow?${withScope(params, scope).toString()}`), {
-    signal,
-  });
+  const res = await fetch(
+    apiUrl(`/api/viz/counters.arrow?${withScope(params, scope).toString()}`),
+    {
+      signal,
+    },
+  );
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(text || `${res.status} ${res.statusText}`);
   }
+  const { tableFromIPC } = await arrow();
   const table = tableFromIPC(new Uint8Array(await res.arrayBuffer()));
   const col = (name: string) => Array.from(table.getChild(name)?.toArray() ?? [], Number);
   return {
@@ -295,7 +320,10 @@ export function fetchCallTree(
   });
   if (query && query.trim()) params.set("query", query.trim());
   if (byProcess) params.set("group", "pid");
-  return getJson<CallTreeResponse>(`/api/viz/calltree?${withScope(params, scope).toString()}`, signal);
+  return getJson<CallTreeResponse>(
+    `/api/viz/calltree?${withScope(params, scope).toString()}`,
+    signal,
+  );
 }
 
 export function fetchHistogram(
@@ -310,7 +338,10 @@ export function fetchHistogram(
     end: String(Math.ceil(end)),
   });
   if (query && query.trim()) params.set("query", query.trim());
-  return getJson<HistogramResponse>(`/api/viz/histogram?${withScope(params, scope).toString()}`, signal);
+  return getJson<HistogramResponse>(
+    `/api/viz/histogram?${withScope(params, scope).toString()}`,
+    signal,
+  );
 }
 
 export function fetchVizStats(

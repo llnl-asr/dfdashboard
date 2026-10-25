@@ -15,7 +15,7 @@ import re
 import threading
 from collections import OrderedDict
 from collections.abc import Iterator
-from typing import Any, Callable, Literal, Optional, Union
+from typing import Any, Callable, Literal, Optional, TypeVar, Union
 
 import pyarrow as pa
 from dftracer.utils import DataFrame, DFTUtilsError, TraceViewer
@@ -73,6 +73,8 @@ from .schema import (
 
 _INT_TYPES = {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
 _FLOAT_TYPES = {"float32", "float64"}
+
+P = TypeVar("P")
 
 
 # One open TraceData per file set. Bounded, because a watch session sees a new
@@ -180,7 +182,7 @@ class TraceData:
                 rename[f"args.{w}"] = w
         return rename, names
 
-    def one[P](self, w: "_Window", q: "Question[P]") -> P:
+    def one(self, w: "_Window", q: "Question[P]") -> P:
         """One question over one window: read, then shape.
 
         A plan depends only on its columns, never on the question's fields, so

@@ -7,7 +7,7 @@ loop stays responsive.
 from __future__ import annotations
 
 import asyncio
-from typing import Callable, Optional
+from typing import Callable, Optional, TypeVar
 
 from dftracer.utils import DFTUtilsDuqlError, DFTUtilsParseError, DFTUtilsValueError
 from fastapi import APIRouter, Depends, Query, Response
@@ -22,13 +22,15 @@ from .cache import LRUCache
 from .deps import get_n_files, get_trace
 from .schemas import EventsPayload, EventWindow, Info, Layers, ProcTree, TimeRange
 
+T = TypeVar("T")
+
 ARROW_MIME = "application/vnd.apache.arrow.stream"
 
 router = APIRouter(prefix="/api", tags=["viz"])
 _responses = LRUCache(maxsize=64)
 
 
-async def _run[T](fn: Callable[..., T], *args: object) -> T:
+async def _run(fn: Callable[..., T], *args: object) -> T:
     try:
         return await asyncio.to_thread(fn, *args)
     except (DFTUtilsDuqlError, DFTUtilsValueError, DFTUtilsParseError, ValueError) as e:

@@ -37,10 +37,10 @@ default, or an external scheduler in service mode.
 
 ## Install
 
-Requires Python 3.12+.
+Requires Python 3.10+.
 
 ```bash
-uv venv --python 3.12
+uv venv --python 3.10
 source .venv/bin/activate
 uv pip install -e .
 ```
@@ -71,6 +71,18 @@ cd web
 npm ci
 npm run build            # -> web/dist (the SPA)
 ```
+
+Browser tests drive that built bundle against a real server, so they need both
+halves in place:
+
+```bash
+cd web
+npx playwright install chromium   # once
+npm run e2e                        # tests/e2e, server started by the config
+```
+
+The suite writes its own run tree to `/tmp/dfdashboard-e2e` and serves it on
+port 5099, so nothing else has to be running.
 
 ## Running
 

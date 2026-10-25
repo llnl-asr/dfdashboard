@@ -15,7 +15,9 @@ from collections import OrderedDict
 from collections.abc import Awaitable
 from dataclasses import asdict, dataclass, field
 from enum import Enum, IntEnum
-from typing import TYPE_CHECKING, Callable, Optional, TypedDict, cast
+from typing import TYPE_CHECKING, Callable, Optional, cast
+
+from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     from ..analysis.base import Result as TaskResult

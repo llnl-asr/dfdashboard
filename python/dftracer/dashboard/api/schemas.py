@@ -6,9 +6,10 @@ one definition and FastAPI validates against it.
 
 from __future__ import annotations
 
-from typing import Optional, TypedDict
+from typing import Optional
 
 from pydantic import BaseModel
+from typing_extensions import TypedDict
 
 from ..data.run_types import EventRow
 

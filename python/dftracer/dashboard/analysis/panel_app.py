@@ -368,7 +368,9 @@ async def _new_session(server: BokehFastAPI, app_path: str, request: Request) ->
         extra_payload=payload,
     )
     if ctx.io_loop is None:
-        ctx._loop = IOLoop.current()  # ty: ignore[invalid-assignment]  bokeh types it as a plain loop
+        # bokeh types the private attribute as a plain loop, which the installed
+        # version does not match, so the write goes through setattr.
+        setattr(ctx, "_loop", IOLoop.current())
     return await ctx.create_session_if_needed(session_id, treq, token)
 
 

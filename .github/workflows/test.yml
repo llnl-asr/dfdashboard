@@ -1,0 +1,143 @@
+name: test
+
+# Three jobs: the Python suite on the oldest and newest supported interpreters,
+# the same for the browser code (format, lint, types, unit tests), and the
+# browser suite against the built bundle and the real server.
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+# One run per ref: a new push or PR update cancels the previous run, so a queue
+# of stale runs never holds a runner.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the floor in pyproject, 3.12 the newest the stack allows.
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # dftracer-utils publishes develop-branch pre-releases.
+          python -m pip install --pre "dftracer-utils"
+          # The scale extra carries distributed, which the type check imports.
+          python -m pip install -e ".[scale]" --group dev
+
+      - name: Lint
+        run: |
+          ruff check python tests
+          ruff format --check python tests
+
+      - name: Type check
+        run: ty check python
+
+      - name: Unit tests
+        run: >
+          python -m pytest tests -q
+          --cov=dftracer.dashboard --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          retention-days: 7
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install
+        working-directory: web
+        run: npm ci
+
+      - name: Formatting
+        working-directory: web
+        run: npm run format:check
+
+      - name: Lint
+        working-directory: web
+        run: npm run lint
+
+      - name: Type check
+        working-directory: web
+        run: npm run typecheck
+
+      - name: Unit tests
+        working-directory: web
+        run: npm test
+
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install the server
+        run: |
+          python -m pip install --upgrade pip
+          # dftracer-utils publishes develop-branch pre-releases.
+          python -m pip install --pre "dftracer-utils"
+          python -m pip install -e .
+          dfdashboard-serve --help >/dev/null
+
+      - name: Build the SPA
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install the browser
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the browser tests
+        working-directory: web
+        run: npx playwright test -c tests/e2e/playwright.config.ts
+        env:
+          CI: "true"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-artifacts
+          path: |
+            web/test-results/
+            web/playwright-report/
+          retention-days: 7

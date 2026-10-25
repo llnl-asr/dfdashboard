@@ -199,3 +199,8 @@ ARCHITECTURE.md
 outputs
 spike/
 python/dftracer/dashboard/web_dist/
+
+# Playwright
+web/test-results/
+web/playwright-report/
+web/.playwright/

@@ -6,9 +6,11 @@ same fields, so this module is the one place the graph is described.
 
 from __future__ import annotations
 
-from typing import NotRequired, TypeAlias, TypedDict
+from typing import Union
 
-Cell: TypeAlias = int | float | str | None
+from typing_extensions import NotRequired, TypeAlias, TypedDict
+
+Cell: TypeAlias = Union[int, float, str, None]
 
 
 class Entity(TypedDict):

@@ -1,10 +1,27 @@
-import { createEffect, createMemo, createSignal, onCleanup, onMount, For, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  lazy,
+  onCleanup,
+  onMount,
+  For,
+  Show,
+  Suspense,
+} from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 import { Rail, type TraceView } from "./ui/Rail";
-import { ProvenanceView } from "./prov/ProvenanceView";
+
+// The two views that carry heavy libraries (cytoscape, the analysis tables) are
+// split out: they load on the first visit, not when the trace boots.
+const ProvenanceView = lazy(() =>
+  import("./prov/ProvenanceView").then((m) => ({ default: m.ProvenanceView })),
+);
+const Analysis = lazy(() => import("./analysis/Analysis"));
+
 import { LogConsole } from "./ui/LogConsole";
 import { StatusBar } from "./ui/StatusBar";
-import Analysis from "./analysis/Analysis";
+
 import { PanelEmbed } from "./ui/PanelCards";
 import { RangeFilter } from "./ui/RangeFilter";
 import { DashGrid, createDashboard, type DashLayout, type DashState } from "./ui/dashgrid";
@@ -110,7 +127,6 @@ const OV_DEFAULT_LAYOUT: DashLayout = {
   io_summary: { x: 5, y: 9, w: 2, h: 2 },
   xfer_hist: { x: 1, y: 10, w: 2, h: 2 },
   access_pattern: { x: 3, y: 10, w: 2, h: 1 },
-
 };
 const OV_DEFAULT: DashState = { cards: OV_CATALOG_IDS, layout: OV_DEFAULT_LAYOUT };
 const OV_LS_KEY = "dfd.dash.overview";
@@ -304,38 +320,38 @@ export default function App() {
   }
 
   function loadProcs(): void {
-      fetchProcTree(runs.scope())
-        .then((pt) => {
-          vs.timeline?.setProcTree(pt.nodes);
-          setOvProcs(
-            pt.nodes.map((n) => ({
-              pid: n.pid,
-              host: n.host || "",
-              label: n.rank != null && n.rank !== "" ? `rank ${n.rank}` : `proc ${n.pid}`,
-            })),
-          );
-          const hosts = new Map<number, string>();
-          const bytes = new Map<number, number>();
-          const ioBusy = new Map<number, number>();
-          const labels = new Map<string, string>();
-          const ranks = new Map<string, string>();
-          for (const n of pt.nodes) {
-            if (n.host) hosts.set(n.pid, n.host);
-            if (n.bytes) bytes.set(n.pid, n.bytes);
-            if (n.io_busy) ioBusy.set(n.pid, n.io_busy);
-            const hasRank = n.rank != null && n.rank !== "";
-            labels.set(String(n.pid), hasRank ? `rank ${n.rank}` : `proc ${n.pid}`);
-            if (hasRank) ranks.set(String(n.pid), n.rank as string);
-          }
-          vs.timeline?.setHosts(hosts);
-          vs.timeline?.setBytes(bytes);
-          vs.timeline?.setIoBusy(ioBusy);
-          vs.timeline?.setProcessLabels(labels);
-          setProcRank(ranks);
-          setGaps(vs.timeline?.topGaps(15) ?? []); // relabel with resolved ranks
-          loadKpis(new Set(pt.nodes.map((n) => n.pid)).size);
-        })
-        .catch(() => loadKpis(0));
+    fetchProcTree(runs.scope())
+      .then((pt) => {
+        vs.timeline?.setProcTree(pt.nodes);
+        setOvProcs(
+          pt.nodes.map((n) => ({
+            pid: n.pid,
+            host: n.host || "",
+            label: n.rank != null && n.rank !== "" ? `rank ${n.rank}` : `proc ${n.pid}`,
+          })),
+        );
+        const hosts = new Map<number, string>();
+        const bytes = new Map<number, number>();
+        const ioBusy = new Map<number, number>();
+        const labels = new Map<string, string>();
+        const ranks = new Map<string, string>();
+        for (const n of pt.nodes) {
+          if (n.host) hosts.set(n.pid, n.host);
+          if (n.bytes) bytes.set(n.pid, n.bytes);
+          if (n.io_busy) ioBusy.set(n.pid, n.io_busy);
+          const hasRank = n.rank != null && n.rank !== "";
+          labels.set(String(n.pid), hasRank ? `rank ${n.rank}` : `proc ${n.pid}`);
+          if (hasRank) ranks.set(String(n.pid), n.rank as string);
+        }
+        vs.timeline?.setHosts(hosts);
+        vs.timeline?.setBytes(bytes);
+        vs.timeline?.setIoBusy(ioBusy);
+        vs.timeline?.setProcessLabels(labels);
+        setProcRank(ranks);
+        setGaps(vs.timeline?.topGaps(15) ?? []); // relabel with resolved ranks
+        loadKpis(new Set(pt.nodes.map((n) => n.pid)).size);
+      })
+      .catch(() => loadKpis(0));
   }
 
   // Refresh what the current view shows. Cheap: one info scan (cached by the
@@ -571,7 +587,7 @@ export default function App() {
     setTopEvBusy(true);
     clearTimeout(vs.topEvTimer);
     vs.topEvTimer = window.setTimeout(() => {
-            const ac = vs.inflight.start("topEvents");
+      const ac = vs.inflight.start("topEvents");
       fetchVizStats(b, e, q, runs.scope(), "name", ac.signal)
         .then((s) => {
           if (ac.signal.aborted) return;
@@ -939,7 +955,7 @@ export default function App() {
     const q = appliedQuery();
     const key = `${q}|${Math.floor(b)}-${Math.ceil(e)}`;
     if (vs.anFlameKey === key && !anFlameLoading()) return;
-        const ac = vs.inflight.start("anFlame");
+    const ac = vs.inflight.start("anFlame");
     setAnFlameLoading(true);
     fetchCallTree(b, e, q, false, runs.scope(), ac.signal)
       .then((res) => {
@@ -1088,7 +1104,7 @@ export default function App() {
     const grouped = flameGrouped();
     const key = `${q}|${grouped ? "p" : ""}`;
     if (vs.flameLoadedQuery === key && !flameLoading()) return;
-        const ac = vs.inflight.start("flame");
+    const ac = vs.inflight.start("flame");
     setFlameLoading(true);
     fetchCallTree(0, vs.totalSpan, q, grouped, runs.scope(), ac.signal)
       .then((res) => {
@@ -1122,7 +1138,7 @@ export default function App() {
   }
 
   function loadInspHist(name: string) {
-        const ac = vs.inflight.start("inspHist");
+    const ac = vs.inflight.start("inspHist");
     setInspHist(null);
     const esc = name.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     const q = appliedQuery();
@@ -1270,7 +1286,7 @@ export default function App() {
 
       // Counter track (bandwidth) for the same window; fire-and-forget so it
       // never blocks the slice data.
-            const cac = vs.inflight.start("counters");
+      const cac = vs.inflight.start("counters");
       fetchVizCounters(begin, end, appliedQuery(), 1200, runs.scope(), cac.signal)
         .then((c) => {
           if (!cac.signal.aborted)
@@ -1422,7 +1438,7 @@ export default function App() {
   }
 
   async function loadEventLog() {
-        const ac = vs.inflight.start("eventLog");
+    const ac = vs.inflight.start("eventLog");
     setEventLogLoading(true);
     try {
       const [b, e] = scopeRange();
@@ -1470,7 +1486,7 @@ export default function App() {
     const pred = distPredicate(analyzeTab(), raw);
     if (!pred) return;
     setDistKey(raw);
-        const ac = vs.inflight.start("dist");
+    const ac = vs.inflight.start("dist");
     setDistLoading(true);
     setDistHist(null);
     const q = appliedQuery();
@@ -2181,7 +2197,9 @@ export default function App() {
                                   >
                                     {name}
                                   </td>
-                                  <td class="op-layer">{String(e.cat || layerOf(vs.layerMap, name))}</td>
+                                  <td class="op-layer">
+                                    {String(e.cat || layerOf(vs.layerMap, name))}
+                                  </td>
                                   <td class="num">
                                     {String(e.pid)}/{String(e.tid)}
                                   </td>
@@ -2938,7 +2956,9 @@ export default function App() {
 
               <Show when={view() === "provenance"}>
                 <div class="body">
-                  <ProvenanceView mode={theme()} scope={runs.scope()} />
+                  <Suspense fallback={<div class="view-loading">loading provenance...</div>}>
+                    <ProvenanceView mode={theme()} scope={runs.scope()} />
+                  </Suspense>
                 </div>
               </Show>
 
@@ -2948,7 +2968,9 @@ export default function App() {
                 </div>
               </Show>
 
-              <Analysis active={view() === "analysis"} />
+              <Suspense fallback={<div class="view-loading">loading analysis...</div>}>
+                <Analysis active={view() === "analysis"} />
+              </Suspense>
             </div>
           </div>
 
