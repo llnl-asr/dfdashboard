@@ -122,10 +122,6 @@ cd web && npm run test && npm run lint && npm run typecheck
 Install the git hooks (ruff, ruff-format, and ty on staged Python) with
 `pre-commit install`.
 
-## Authors
-
-Ray A. O. Sinurat <raydreww@gmail.com>
-
 ## License
 
 DFDashboard is distributed under the terms of the MIT license.
