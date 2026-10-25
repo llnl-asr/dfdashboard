@@ -1,0 +1,63 @@
+/* DFDashboard docs, a thin layer over the Shibuya theme the dftracer-utils docs
+   use. The accent, the sans face and the colors come from the theme. */
+
+/* ---- Landing hero -------------------------------------------------------
+   No banner image: the hero is the title and one paragraph. Centered, with a
+   measure that reads well at 1440 px. */
+.dfd-hero {
+  margin: 0 auto 2rem;
+  max-width: 46rem;
+  text-align: center;
+}
+
+.dfd-hero h1 {
+  margin-bottom: 0.8rem;
+  font-size: clamp(1.9rem, 3.2vw, 2.6rem);
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.dfd-hero .dfd-tagline {
+  color: var(--sy-c-light);
+  font-size: 1.02rem;
+  line-height: 1.6;
+}
+
+.dfd-hero code {
+  font-size: 0.92em;
+}
+
+/* ---- Screenshots --------------------------------------------------------
+   A hairline frame around the app shots, so a light page does not bleed into a
+   light screenshot. */
+.dfd-hero-shot,
+.dfd-shot {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--sy-c-border, rgba(120, 120, 140, 0.18));
+  border-radius: 12px;
+}
+
+.dfd-hero-shot {
+  margin: 0 auto 2.2rem;
+}
+
+.dfd-shot {
+  margin: 0 auto 1.6rem;
+}
+
+/* ---- Cards --------------------------------------------------------------
+   A hairline border and a small lift on hover, so the grid reads as objects
+   instead of boxes of text. */
+.sd-card {
+  border: 1px solid var(--sy-c-border, rgba(120, 120, 140, 0.18));
+  border-radius: 12px;
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.sd-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--sy-c-link);
+}

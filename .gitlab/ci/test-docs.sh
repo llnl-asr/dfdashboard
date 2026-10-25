@@ -40,5 +40,5 @@ $PODMAN run --rm --user 0:0 -v "$PWD:/ws" -w /ws "${PIP_ENV[@]}" docker.io/libra
   pip install --quiet --upgrade pip
   pip install --quiet -r docs/requirements.txt
   # -W fails on a warning, -n also fails on an unresolved reference.
-  sphinx-build -b html -E -W --keep-going -n docs public
+  sphinx-build -b html -E -W --keep-going -n docs/source public
 '

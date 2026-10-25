@@ -12,7 +12,7 @@ import re
 from dftracer.dashboard import cli
 from dftracer.dashboard.data.watch import _FORMAT_DIRS, _MARKERS
 
-PAGE = "docs/runs.rst"
+PAGE = "docs/source/runs.rst"
 
 # Flags that belong to other tools, which the page quotes in a command.
 FOREIGN_FLAGS = {"--compress"}
@@ -56,8 +56,8 @@ def test_every_flag_in_the_page_exists():
 
 
 def test_page_is_in_the_docs_tree():
-    with open("docs/index.rst") as fh:
-        assert "runs" in fh.read(), "docs/index.rst does not include the runs page"
+    with open("docs/source/index.rst") as fh:
+        assert "runs" in fh.read(), "docs/source/index.rst does not include the runs page"
 
 
 def test_page_quotes_the_engine_error_verbatim():

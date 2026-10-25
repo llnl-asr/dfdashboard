@@ -1,7 +1,7 @@
 [project]
 name = "dftracer-dashboard"
 version = "0.0.1"
-description = "The Interactive Visualization Layer of the DataFlowX Suite"
+description = "A browser dashboard for DFTracer traces, the interactive visualization layer of the DataFlowX suite"
 readme = "README.md"
 authors = [
   { name = "Ray A. O. Sinurat", email = "raydreww@gmail.com" },

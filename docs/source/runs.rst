@@ -2,27 +2,10 @@ Run directories
 ===============
 
 This page is the contract between a trace producer and DFDashboard.
-It describes the directory layout to write, and the rules the server applies to that layout.
+It lists the layout the server reads and the rules it applies to that layout.
 
 A run is one execution of an application.
-DFDashboard finds runs by their trace files, so the unit you create on disk is the unit that appears in the dashboard.
-
-Usage
------
-
-.. code-block:: bash
-
-   dfdashboard-serve --watch /path/to/root --web-dist web/dist
-
-Runs appear in band order by first timestamp, so a directory name never decides the order.
-A run with no records yet sorts last.
-
-The watcher uses kernel events on a local filesystem and a stat poll on a network filesystem such as NFS or Lustre, because a write from another node produces no local event.
-``/api/runs`` reports which one is in use.
-
-``--watch`` rescans the tree while the server runs.
-``--trace`` still opens a fixed set of files and never rescans.
-``dfdashboard-serve --help`` lists every option.
+The server finds runs by their trace files, so the unit you create on disk is the unit that appears in the dashboard.
 
 Layout
 ------
@@ -38,7 +21,7 @@ Layout
        _SUCCESS                         optional marker, this run is finished
 
 The shape is free.
-These two trees also work:
+Both trees below are also read.
 
 .. code-block:: text
 
@@ -60,13 +43,24 @@ Rules
   The detector reads file names, not directory names, so a renamed directory changes nothing.
 - A directory whose name starts with a dot is skipped.
   The server keeps its index in ``--index-dir``, outside the tree.
+- Run order is by first timestamp in band order, so a directory name never decides the order.
+  A run with no records yet sorts last.
+
+Watcher
+-------
+
+The watcher uses kernel events on a local filesystem and a stat poll on a network filesystem such as NFS or Lustre, because a write from another node produces no local event.
+``GET /api/runs`` reports which one is in use.
+
+``--watch`` rescans the tree while the server runs.
+``--trace`` opens a fixed set of files and never rescans.
 
 Completion
 ----------
 
-A run is ``live`` while it is still being written, ``done`` when it is finished, and ``stalled`` when nothing changed for ``--stall`` and the run is not done.
+A run is ``live`` while it is still being written, ``done`` when it is finished, and ``stalled`` when nothing changed for ``--stall`` seconds and the run is not done.
 ``GET /api/runs`` reports the reason next to the state, so a run that says ``done`` also says how that was proven.
-:doc:`api` lists the response shape.
+:doc:`api/index` points at the response shape.
 
 .. list-table::
    :header-rows: 1
@@ -102,16 +96,5 @@ A compact set is proven by the raw set.
 A split that is still running falls short, which makes the check exact and needs no cooperation.
 
 A compact set with no raw set next to it is the one case without a proof.
-DFDashboard then waits for ``--settle`` seconds without a write.
+The server then waits for ``--settle`` seconds without a write.
 Keep the raw set, or have the split script write a marker, to avoid that wait.
-
-What to write
--------------
-
-A producer that follows these three lines is watched without configuration:
-
-1. Write the raw files into ``<run>/raw/``.
-2. Split them with ``dftracer_split --compress`` into ``<run>/compact/``.
-3. Write ``<run>/_SUCCESS`` after the last chunk.
-
-The dashboard then shows the compact set, not the raw files, and marks the run done as soon as the marker lands.
