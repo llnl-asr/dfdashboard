@@ -2,7 +2,7 @@
 #
 # Single doc source shared by ReadTheDocs (GitHub) and GitLab Pages.
 
-project = "dfdashboard"
+project = "dftracer.dashboard"
 copyright = "2025-2026, Lawrence Livermore National Security"
 author = "Ray A. O. Sinurat, Hariharan Devarajan"
 

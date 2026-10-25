@@ -2,30 +2,18 @@ import gzip
 import os
 
 import pytest
+from traces import event, meta, multirun, posix, write_trace  # noqa: E402
 
 pytest.importorskip("dftracer.utils")
 
-from dfdashboard.data.trace import TraceData  # noqa: E402
+from dftracer.dashboard.data.trace import TraceData  # noqa: E402
 
 
 def _write_trace(directory: str) -> str:
-    lines = [
-        '{"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"host"}}',
-    ]
-    base = 1_000_000
-    for i in range(5):
-        lines.append(
-            f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":{base + i * 100},'
-            f'"dur":10,"ph":"X","args":{{"ret":1024}}}}'
-        )
-    lines.append(
-        f'{{"name":"compute","cat":"APP","pid":1,"tid":1,"ts":{base + 500},'
-        f'"dur":50,"ph":"X","args":{{}}}}'
+    return write_trace(
+        directory,
+        [meta("HH", {"name": "host"}), *posix(5, ret=1024), event("compute", 1_000_500, 50)],
     )
-    path = os.path.join(directory, "t.pfw.gz")
-    with gzip.open(path, "wt") as fh:
-        fh.write("\n".join(lines) + "\n")
-    return path
 
 
 def test_info_and_events(tmp_path):
@@ -111,36 +99,10 @@ def test_proctree_has_bytes(tmp_path):
     assert nodes[0]["io_ops"] == 5
 
 
-def _write_multirun_trace(directory, num_runs=3, run_us=1_000_000, gap_us=10_000):
-    base = 1_000_000_000
-    lines: list[str] = []
-    for r in range(num_runs):
-        pid = 100 + r
-        start = base + r * (run_us + gap_us)
-        end = start + run_us
-        lines.append(
-            f'{{"id":1,"pid":{pid},"tid":{pid * 10},"name":"start","cat":"dftracer",'
-            f'"ph":"X","ts":{start},"dur":1,"args":{{"exec_hash":"app","ppid":1}}}}'
-        )
-        for i in range(3):
-            lines.append(
-                f'{{"id":1,"pid":{pid},"tid":{pid * 10},"name":"read","cat":"POSIX",'
-                f'"ph":"X","ts":{start + i * (run_us // 4)},"dur":100,"args":{{"ret":1024}}}}'
-            )
-        lines.append(
-            f'{{"id":1,"pid":{pid},"tid":{pid * 10},"name":"end","cat":"dftracer",'
-            f'"ph":"X","ts":{end},"dur":1,"args":{{"num_events":3}}}}'
-        )
-    path = os.path.join(directory, "multirun.pfw.gz")
-    with gzip.open(path, "wt") as fh:
-        fh.write("\n".join(lines) + "\n")
-    return path
-
-
 def test_breaks_drops_tiny_between_run_gaps(tmp_path):
     # 3 runs of 1s with 10ms idle (~0.33% of the span): too small to be worth a
     # skip marker, so timelapse leaves them as real time rather than adding noise.
-    path = _write_multirun_trace(str(tmp_path))
+    path = multirun(tmp_path)
     td = TraceData(path, index_dir=str(tmp_path / "idx"))
 
     res = td.breaks()
@@ -150,7 +112,7 @@ def test_breaks_drops_tiny_between_run_gaps(tmp_path):
 
 def test_breaks_keeps_significant_gaps(tmp_path):
     # 3 runs of 1s with 300ms idle: past the threshold, so the dead time is skipped.
-    path = _write_multirun_trace(str(tmp_path), gap_us=300_000)
+    path = multirun(tmp_path, gap_us=300_000)
     td = TraceData(path, index_dir=str(tmp_path / "idx"))
 
     res = td.breaks()

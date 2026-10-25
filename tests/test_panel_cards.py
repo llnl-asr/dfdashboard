@@ -6,32 +6,24 @@ runs, so scheduling the card fills with asyncio.ensure_future() raises
 """
 
 import asyncio
-import gzip
-import os
+from types import SimpleNamespace
 
 import pytest
+from traces import posix, write_trace  # noqa: E402
 
 pytest.importorskip("dftracer.utils")
 
+from dftracer.dashboard.cards import app as cards_app  # noqa: E402
+from dftracer.dashboard.cards import base as cards_base  # noqa: E402
+from dftracer.dashboard.cards import builders as cards_builders  # noqa: E402
+from dftracer.dashboard.cards import session as cards_session  # noqa: E402
+from dftracer.dashboard.config import Settings  # noqa: E402
+from dftracer.dashboard.server import create_app  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-
-from dfdashboard.analysis import cards as cards_mod  # noqa: E402
-from dfdashboard.config import Settings  # noqa: E402
-from dfdashboard.server import create_app  # noqa: E402
 
 
 def _write_trace(directory: str) -> str:
-    lines: list[str] = []
-    base = 1_000_000
-    for i in range(6):
-        lines.append(
-            f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":{base + i * 100},'
-            f'"dur":10,"ph":"X","args":{{"ret":1024}}}}'
-        )
-    path = os.path.join(directory, "t.pfw.gz")
-    with gzip.open(path, "wt") as fh:
-        fh.write("\n".join(lines) + "\n")
-    return path
+    return write_trace(directory, posix(6, ret=1024))
 
 
 def test_cards_fill_from_the_document_worker_thread(tmp_path, monkeypatch):
@@ -40,17 +32,17 @@ def test_cards_fill_from_the_document_worker_thread(tmp_path, monkeypatch):
     )
 
     scheduled = []
-    real_spawn = cards_mod.spawn
+    real_spawn = cards_app.spawn
 
     def recording_spawn(app_: object, coro: object) -> object:
         fut = real_spawn(app_, coro)
         scheduled.append(fut)
         return fut
 
-    monkeypatch.setattr(cards_mod, "spawn", recording_spawn)
+    monkeypatch.setattr(cards_app, "spawn", recording_spawn)
 
     with TestClient(app) as client:
-        res = client.get(f"{cards_mod.CARDS_PATH}/autoload.js?bokeh-autoload-element=x")
+        res = client.get(f"{cards_app.CARDS_PATH}/autoload.js?bokeh-autoload-element=x")
         assert res.status_code == 200
         assert scheduled, "no card fill was scheduled"
         # .result() on the scheduled future re-raises anything the fill raised.
@@ -69,21 +61,30 @@ class _Registry:
 
 
 def _app_with(registry: object) -> object:
-    from types import SimpleNamespace
-
     return SimpleNamespace(state=SimpleNamespace(registry=registry, trace=None))
 
 
+class _Fill:
+    """Stand-in for a card: the live loop only needs an id and a fill."""
+
+    id = "c"
+
+    def __init__(self, fn) -> None:
+        self.fn = fn
+
+    async def fill(self, doc: object) -> None:
+        await self.fn(doc)
+
+
 async def test_live_card_repaints_only_when_the_tree_changes(monkeypatch):
-    monkeypatch.setattr(cards_mod, "REFRESH_S", 0.01)
+    monkeypatch.setattr(cards_base, "REFRESH_S", 0.01)
     registry = _Registry()
-    app = _app_with(registry)
     paints: list[int] = []
 
     async def fill(_doc: object) -> None:
         paints.append(registry.seq)
 
-    task = asyncio.create_task(cards_mod._live(app, "c", fill, None))
+    task = asyncio.create_task(cards_base.live(_app_with(registry), _Fill(fill), None))
     await asyncio.sleep(0.1)
     assert paints == [1], "an unchanged tree must not repaint"
 
@@ -97,20 +98,19 @@ async def test_live_card_repaints_only_when_the_tree_changes(monkeypatch):
 
 
 async def test_live_card_paints_once_without_a_watcher(monkeypatch):
-    monkeypatch.setattr(cards_mod, "REFRESH_S", 0.01)
+    monkeypatch.setattr(cards_base, "REFRESH_S", 0.01)
     paints: list[int] = []
 
     async def fill(_doc: object) -> None:
         paints.append(len(paints))
 
-    await asyncio.wait_for(cards_mod._live(_app_with(None), "c", fill, None), timeout=5)
+    await asyncio.wait_for(cards_base.live(_app_with(None), _Fill(fill), None), timeout=5)
     assert paints == [0]
 
 
 async def test_live_card_survives_a_failing_fill(monkeypatch):
-    monkeypatch.setattr(cards_mod, "REFRESH_S", 0.01)
+    monkeypatch.setattr(cards_base, "REFRESH_S", 0.01)
     registry = _Registry()
-    app = _app_with(registry)
     calls: list[int] = []
 
     async def fill(_doc: object) -> None:
@@ -118,7 +118,7 @@ async def test_live_card_survives_a_failing_fill(monkeypatch):
         if len(calls) == 1:
             raise RuntimeError("index is still being built")
 
-    task = asyncio.create_task(cards_mod._live(app, "c", fill, None))
+    task = asyncio.create_task(cards_base.live(_app_with(registry), _Fill(fill), None))
     await asyncio.sleep(0.1)
     registry.seq = 2
     await asyncio.sleep(0.1)
@@ -129,54 +129,56 @@ async def test_live_card_survives_a_failing_fill(monkeypatch):
 
 
 async def test_io_by_host_asks_again_instead_of_reusing_a_cached_result(monkeypatch):
-    from types import SimpleNamespace
-
     specs: list[object] = []
 
     async def fake_run(_app: object, spec: object, *_a: object, **_k: object) -> object:
         specs.append(spec)
         return SimpleNamespace(data={"bytes_by_host": {"node1": 1}})
 
-    monkeypatch.setattr(cards_mod, "_run_task", fake_run)
+    monkeypatch.setattr(cards_session, "run_task", fake_run)
     app = SimpleNamespace(state=SimpleNamespace(trace=object(), registry=None))
-    _card, fill = cards_mod._io_by_host(app, "dark")
+    card = cards_builders.IoByHost(app, "dark")
 
     class Doc:
         def add_next_tick_callback(self, cb: object) -> None:
             cb()  # type: ignore[operator]
 
-    await fill(Doc())
-    await fill(Doc())
+    await card.fill(Doc())
+    await card.fill(Doc())
     assert len(specs) == 2, "a second fill must not be served from the result cache"
     assert getattr(specs[0], "cache") is False
 
 
 def test_every_card_shows_the_same_busy_indicator():
-    html = cards_mod._html_card("X", "loading...")
-    markup = html.object  # ty: ignore[unresolved-attribute]
-    assert "pcard-busy" in markup, "an HTML card must show a spinner like the canvas cards"
-    css = cards_mod._CARD_CSS
-    assert ".pcard-dot" in css and "pcard-spin" in css
+    app = SimpleNamespace(state=SimpleNamespace(trace=None, registry=None))
+    shown = {}
+    for cls in cards_builders.CARDS:
+        card = cls(app, "dark")
+        shown[cls.id] = getattr(card, "status", card.view).object
+
+    assert len(shown) == 12
+    for cid, markup in shown.items():
+        assert "pcard-busy" in markup, f"{cid} must show a spinner like the other cards"
+    assert ".pcard-dot" in cards_base.CARD_CSS
+    assert "pcard-spin" in cards_base.CARD_CSS
 
 
 async def test_io_by_host_waits_instead_of_failing_without_a_trace(monkeypatch):
-    from types import SimpleNamespace
-
     calls: list[object] = []
 
     async def fake_run(_app: object, spec: object, *_a: object, **_k: object) -> object:
         calls.append(spec)
         raise AssertionError("the pipeline must not run without a trace")
 
-    monkeypatch.setattr(cards_mod, "_run_task", fake_run)
+    monkeypatch.setattr(cards_session, "run_task", fake_run)
     app = SimpleNamespace(state=SimpleNamespace(trace=None, registry=None))
-    card, fill = cards_mod._io_by_host(app, "dark")
+    card = cards_builders.IoByHost(app, "dark")
 
     class Doc:
         def add_next_tick_callback(self, cb: object) -> None:
             cb()  # type: ignore[operator]
 
-    await fill(Doc())
+    await card.fill(Doc())
     assert calls == []
-    markup = card.object  # ty: ignore[unresolved-attribute]
-    assert cards_mod.WAITING in markup and 'class="pcard-err"' not in markup
+    markup = card.view.object  # ty: ignore[unresolved-attribute]
+    assert cards_base.WAITING in markup and 'class="pcard-err"' not in markup

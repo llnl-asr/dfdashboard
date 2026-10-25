@@ -1,12 +1,12 @@
 API Reference
 =============
 
-This page documents the main public modules of the ``dfdashboard`` package. The
+This page documents the main public modules of the ``dftracer-dashboard`` package. The
 package exposes a single console entry point, ``dfdashboard-serve``, which maps
-to ``dfdashboard.cli.main``.
+to ``dftracer.dashboard.cli.main``.
 
-dfdashboard.cli
----------------
+dftracer.dashboard.cli
+----------------------
 
 Command-line entry point.
 
@@ -14,8 +14,8 @@ Command-line entry point.
 - ``main(argv=None)`` - the ``dfdashboard-serve`` entry point; builds the app
   and runs it under uvicorn.
 
-dfdashboard.config
-------------------
+dftracer.dashboard.config
+-------------------------
 
 Runtime configuration, built on ``pydantic-settings`` (environment prefix
 ``DFDASHBOARD_``).
@@ -27,8 +27,8 @@ Runtime configuration, built on ``pydantic-settings`` (environment prefix
   timeout) presets over the same knobs.
 - ``Settings.for_preset(preset, **overrides)`` - build settings for a preset.
 
-dfdashboard.server
-------------------
+dftracer.dashboard.server
+-------------------------
 
 The FastAPI application.
 
@@ -36,31 +36,31 @@ The FastAPI application.
   routers and response compression, opens the trace index, starts the Dask
   cluster and task backend, and (with ``web_dist``) serves the SPA.
 
-dfdashboard.api
----------------
+dftracer.dashboard.api
+----------------------
 
 The HTTP routers included by the app: ``viz_router`` (timeline stream, density,
 counters, stats), ``tasks_router``, ``dashboard_router``, ``logs_router``, and
 ``runtime_router``.
 
-dfdashboard.data
-----------------
+dftracer.dashboard.data
+-----------------------
 
 The trace data layer over the dftracer-utils bindings.
 
 - ``TraceData`` - opens and indexes the trace files and answers the viz queries
   (timeline stream, density, counters, proctree, breaks, stats).
 
-dfdashboard.compute
--------------------
+dftracer.dashboard.compute
+--------------------------
 
 Dask cluster and worker glue.
 
 - ``ClusterManager`` - owns a local ``LocalCluster`` or connects to an external
   scheduler and hands out clients.
 
-dfdashboard.runtime
--------------------
+dftracer.dashboard.runtime
+--------------------------
 
 The task and logging runtime.
 
@@ -69,14 +69,9 @@ The task and logging runtime.
 - ``logs.get_hub()`` - the log hub that captures Python logging and native
   dftracer-utils output for the log console.
 
-dfdashboard.analysis
---------------------
+dftracer.dashboard.analysis
+---------------------------
 
 Dask analysis pipelines, the built-in cards, and the Panel embedding
-(``mount_panel``) used to serve dashboards next to the timeline.
+(``mount_panel``) used to serve analysis panels next to the timeline.
 
-dfdashboard.widgets
--------------------
-
-- ``TimelineWidget`` - the embeddable anywidget timeline for notebooks, backed
-  by the same ``TraceData`` queries.

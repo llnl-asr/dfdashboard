@@ -21,33 +21,11 @@ export type { TimelineBatch };
 // True when the view is scoped to a single trace file.
 export const SINGLE_FILE = CONFIG.file !== "";
 
-// Run scope, either from ?run= in the URL or from a click on a run chip. Every
-// endpoint that takes a scope follows it, so one selection drives the whole view.
-let RUN_SCOPE = new URLSearchParams(location.search).get("run") || "";
-
-export function setRunScope(run: string): void {
-  RUN_SCOPE = run;
-}
-
-export function currentRunScope(): string {
-  return RUN_SCOPE;
-}
-
-// A scoped run can vanish when the tree is wiped or a run directory is renamed.
-// Drop the scope and the URL parameter so the view falls back to all runs
-// instead of asking the server for a run that no longer exists.
-export function clearRunScope(): void {
-  RUN_SCOPE = "";
-  const p = new URLSearchParams(location.search);
-  if (!p.has("run")) return;
-  p.delete("run");
-  const q = p.toString();
-  history.replaceState(null, "", `${location.pathname}${q ? `?${q}` : ""}`);
-}
-
-function withFile(params: URLSearchParams): URLSearchParams {
+// The scope is passed in by the caller: the view owns it, this layer stays a
+// set of pure functions. An empty scope means every run.
+function withScope(params: URLSearchParams, scope: string): URLSearchParams {
   if (CONFIG.file) params.set("file", CONFIG.file);
-  if (RUN_SCOPE) params.set("run", RUN_SCOPE);
+  if (scope) params.set("run", scope);
   return params;
 }
 
@@ -72,8 +50,8 @@ export interface RunsFrame {
   watch?: "poll" | "events";
 }
 
-export function fetchRuns(signal?: AbortSignal): Promise<RunsFrame> {
-  return getJson<RunsFrame>(`/api/runs?${withFile(new URLSearchParams()).toString()}`, signal);
+export function fetchRuns(scope: string, signal?: AbortSignal): Promise<RunsFrame> {
+  return getJson<RunsFrame>(`/api/runs?${withScope(new URLSearchParams(), scope).toString()}`, signal);
 }
 
 // Server-sent events: one frame per change while the directory tree is watched.
@@ -111,34 +89,50 @@ export async function apiRequest(path: string): Promise<{ status: number; body: 
   }
 }
 
-// FastAPI errors arrive as {"detail": "..."}; show the detail, not the JSON.
-function errorText(status: number, statusText: string, body: string): string {
+// API errors arrive as {"code": "...", "detail": "...", "status": 404}. The
+// message is for the reader and the code is for the code: never branch on the
+// text, a reworded message would silently break the recovery.
+export class ApiFailure extends Error {
+  code: string;
+  status: number;
+
+  constructor(message: string, code: string, status: number) {
+    super(message);
+    this.code = code;
+    this.status = status;
+  }
+}
+
+function apiFailure(status: number, statusText: string, body: string): ApiFailure {
+  let code = "";
+  let detail = "";
   try {
-    const parsed = JSON.parse(body) as { detail?: unknown };
-    if (typeof parsed.detail === "string" && parsed.detail) return parsed.detail;
+    const parsed = JSON.parse(body) as { code?: unknown; detail?: unknown };
+    if (typeof parsed.code === "string") code = parsed.code;
+    if (typeof parsed.detail === "string") detail = parsed.detail;
   } catch {
     /* not json */
   }
-  return body || `${status} ${statusText}`;
+  return new ApiFailure(detail || body || `${status} ${statusText}`, code, status);
 }
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(apiUrl(url), { signal });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(errorText(res.status, res.statusText, text));
+    throw apiFailure(res.status, res.statusText, text);
   }
   return (await res.json()) as T;
 }
 
-export function fetchInfo(signal?: AbortSignal): Promise<InfoResponse> {
-  return getJson<InfoResponse>(`/api/info?${withFile(new URLSearchParams()).toString()}`, signal);
+export function fetchInfo(scope: string, signal?: AbortSignal): Promise<InfoResponse> {
+  return getJson<InfoResponse>(`/api/info?${withScope(new URLSearchParams(), scope).toString()}`, signal);
 }
 
-export function fetchProcTree(signal?: AbortSignal): Promise<{ nodes: ProcTreeNode[] }> {
+export function fetchProcTree(scope: string, signal?: AbortSignal): Promise<{ nodes: ProcTreeNode[] }> {
   const params = new URLSearchParams();
   return getJson<{ nodes: ProcTreeNode[] }>(
-    `/api/viz/proctree?${withFile(params).toString()}`,
+    `/api/viz/proctree?${withScope(params, scope).toString()}`,
     signal,
   );
 }
@@ -166,13 +160,17 @@ async function getArrowEvents(url: string, signal?: AbortSignal): Promise<TraceE
   });
 }
 
-export async function fetchViz(q: VizQuery, signal?: AbortSignal): Promise<VizResponse> {
+export async function fetchViz(
+  q: VizQuery,
+  scope: string,
+  signal?: AbortSignal,
+): Promise<VizResponse> {
   const params = new URLSearchParams({
     begin: String(Math.floor(q.begin)),
     end: String(Math.ceil(q.end)),
   });
   if (q.query && q.query.trim()) params.set("query", q.query.trim());
-  const events = await getArrowEvents(`/api/viz/events.arrow?${withFile(params).toString()}`, signal);
+  const events = await getArrowEvents(`/api/viz/events.arrow?${withScope(params, scope).toString()}`, signal);
   return {
     events,
     metadata: {
@@ -189,6 +187,7 @@ export async function fetchViz(q: VizQuery, signal?: AbortSignal): Promise<VizRe
 
 export async function fetchTimelineStream(
   q: VizQuery,
+  scope: string,
   onBatch: (b: TimelineBatch) => void,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -200,7 +199,7 @@ export async function fetchTimelineStream(
   if (q.query && q.query.trim()) params.set("query", q.query.trim());
   if (q.lookback && q.lookback > 0) params.set("lookback", String(Math.ceil(q.lookback)));
   if (q.width && q.width > 0) params.set("width", String(Math.round(q.width)));
-  const res = await fetch(apiUrl(`/api/viz/timeline.arrow?${withFile(params).toString()}`), {
+  const res = await fetch(apiUrl(`/api/viz/timeline.arrow?${withScope(params, scope).toString()}`), {
     signal,
   });
   if (!res.ok || !res.body) {
@@ -219,11 +218,13 @@ export async function fetchOverviewDensity(
   span: number,
   query: string,
   width: number | undefined,
+  scope: string,
   signal?: AbortSignal,
 ): Promise<DensityBlock[]> {
   const blocks: DensityBlock[] = [];
   await fetchTimelineStream(
     { begin: 0, end: span, summary: 2, query, width },
+    scope,
     (b) => blocks.push(...b.density),
     signal,
   );
@@ -240,9 +241,9 @@ export interface VizBreaks {
   max_life?: number;
 }
 
-export function fetchVizBreaks(signal?: AbortSignal): Promise<VizBreaks> {
+export function fetchVizBreaks(scope: string, signal?: AbortSignal): Promise<VizBreaks> {
   const params = new URLSearchParams();
-  return getJson<VizBreaks>(`/api/viz/breaks?${withFile(params).toString()}`, signal);
+  return getJson<VizBreaks>(`/api/viz/breaks?${withScope(params, scope).toString()}`, signal);
 }
 
 export async function fetchVizCounters(
@@ -250,6 +251,7 @@ export async function fetchVizCounters(
   end: number,
   query: string,
   buckets: number,
+  scope: string,
   signal?: AbortSignal,
 ): Promise<VizCounters> {
   const params = new URLSearchParams({
@@ -258,7 +260,7 @@ export async function fetchVizCounters(
     buckets: String(buckets),
   });
   if (query && query.trim()) params.set("query", query.trim());
-  const res = await fetch(apiUrl(`/api/viz/counters.arrow?${withFile(params).toString()}`), {
+  const res = await fetch(apiUrl(`/api/viz/counters.arrow?${withScope(params, scope).toString()}`), {
     signal,
   });
   if (!res.ok) {
@@ -284,6 +286,7 @@ export function fetchCallTree(
   end: number,
   query: string,
   byProcess: boolean,
+  scope: string,
   signal?: AbortSignal,
 ): Promise<CallTreeResponse> {
   const params = new URLSearchParams({
@@ -292,13 +295,14 @@ export function fetchCallTree(
   });
   if (query && query.trim()) params.set("query", query.trim());
   if (byProcess) params.set("group", "pid");
-  return getJson<CallTreeResponse>(`/api/viz/calltree?${withFile(params).toString()}`, signal);
+  return getJson<CallTreeResponse>(`/api/viz/calltree?${withScope(params, scope).toString()}`, signal);
 }
 
 export function fetchHistogram(
   begin: number,
   end: number,
   query: string,
+  scope: string,
   signal?: AbortSignal,
 ): Promise<HistogramResponse> {
   const params = new URLSearchParams({
@@ -306,13 +310,14 @@ export function fetchHistogram(
     end: String(Math.ceil(end)),
   });
   if (query && query.trim()) params.set("query", query.trim());
-  return getJson<HistogramResponse>(`/api/viz/histogram?${withFile(params).toString()}`, signal);
+  return getJson<HistogramResponse>(`/api/viz/histogram?${withScope(params, scope).toString()}`, signal);
 }
 
 export function fetchVizStats(
   t0: number,
   t1: number,
   query: string,
+  scope: string,
   group?: string,
   signal?: AbortSignal,
 ): Promise<SelectionStats> {
@@ -322,7 +327,7 @@ export function fetchVizStats(
   });
   if (query && query.trim()) params.set("query", query.trim());
   if (group) params.set("group", group);
-  return getJson<SelectionStats>(`/api/viz/stats?${withFile(params).toString()}`, signal);
+  return getJson<SelectionStats>(`/api/viz/stats?${withScope(params, scope).toString()}`, signal);
 }
 
 export interface LayersResponse {
@@ -331,9 +336,9 @@ export interface LayersResponse {
   io_files: number; // files actually read from or written to
 }
 
-export function fetchLayers(signal?: AbortSignal): Promise<LayersResponse> {
+export function fetchLayers(scope: string, signal?: AbortSignal): Promise<LayersResponse> {
   return getJson<LayersResponse>(
-    `/api/viz/layers?${withFile(new URLSearchParams()).toString()}`,
+    `/api/viz/layers?${withScope(new URLSearchParams(), scope).toString()}`,
     signal,
   );
 }
@@ -417,9 +422,10 @@ export interface ProvGraphResponse {
 
 export function fetchProvGraph(
   params: { io?: boolean; allFiles?: boolean; mounts?: string },
+  scope: string,
   signal?: AbortSignal,
 ): Promise<ProvGraphResponse> {
-  const p = new URLSearchParams(withFile(new URLSearchParams()));
+  const p = new URLSearchParams(withScope(new URLSearchParams(), scope));
   p.set("io", params.io === false ? "0" : "1");
   if (params.allFiles) p.set("all_files", "1");
   if (params.mounts) p.set("mounts", params.mounts);

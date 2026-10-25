@@ -198,4 +198,4 @@ ARCHITECTURE.md
 
 outputs
 spike/
-dfdashboard/web_dist/
+python/dftracer/dashboard/web_dist/

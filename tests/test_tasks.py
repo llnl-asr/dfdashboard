@@ -1,10 +1,9 @@
 import asyncio
 
 import pytest
+from dftracer.dashboard.analysis.base import Pipeline, Result, RunContext
+from dftracer.dashboard.runtime import EventBus, InProcessTaskBackend, TaskSpec, TaskState
 from pydantic import BaseModel
-
-from dfdashboard.analysis.base import Pipeline, Result, RunContext
-from dfdashboard.runtime import EventBus, InProcessTaskBackend, TaskSpec, TaskState
 
 
 class EchoParams(BaseModel):

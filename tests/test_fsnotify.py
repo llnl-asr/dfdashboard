@@ -15,8 +15,10 @@ import pytest
 # Import the module by path: the data package pulls numpy, pyarrow and the
 # dftracer engine, none of which this module needs.
 _spec = importlib.util.spec_from_file_location(
-    "dfdashboard_fsnotify",
-    os.path.join(os.path.dirname(__file__), "..", "dfdashboard", "data", "fsnotify.py"),
+    "dftracer_dashboard_fsnotify",
+    os.path.join(
+        os.path.dirname(__file__), "..", "python", "dftracer", "dashboard", "data", "fsnotify.py"
+    ),
 )
 assert _spec and _spec.loader
 fsnotify = importlib.util.module_from_spec(_spec)
@@ -114,11 +116,11 @@ def test_inotify_ignores_unrelated_files(tmp_path):
 
 
 def test_watcher_reports_its_strategy(tmp_path, monkeypatch):
-    from dfdashboard.data.watch import RunRegistry, Watcher
+    from dftracer.dashboard.data.watch import RunRegistry, Watcher
 
     reg = RunRegistry(str(tmp_path), str(tmp_path / "idx"))
     monkeypatch.setattr(
-        "dfdashboard.data.watch.fsnotify.strategy", lambda root, text=None: fsnotify.POLL
+        "dftracer.dashboard.data.watch.fsnotify.strategy", lambda root, text=None: fsnotify.POLL
     )
     w = Watcher(reg, interval=0.2, use_events=True)
     w.start()
@@ -131,13 +133,13 @@ def test_watcher_reports_its_strategy(tmp_path, monkeypatch):
 
 
 def test_watcher_falls_back_when_inotify_is_refused(tmp_path, monkeypatch):
-    from dfdashboard.data.watch import RunRegistry, Watcher
+    from dftracer.dashboard.data.watch import RunRegistry, Watcher
 
     reg = RunRegistry(str(tmp_path), str(tmp_path / "idx"))
     monkeypatch.setattr(
-        "dfdashboard.data.watch.fsnotify.strategy", lambda root, text=None: fsnotify.EVENTS
+        "dftracer.dashboard.data.watch.fsnotify.strategy", lambda root, text=None: fsnotify.EVENTS
     )
-    monkeypatch.setattr("dfdashboard.data.watch.fsnotify.Inotify.start", lambda self: False)
+    monkeypatch.setattr("dftracer.dashboard.data.watch.fsnotify.Inotify.start", lambda self: False)
     w = Watcher(reg, interval=0.2, use_events=True)
     assert w._choose() == fsnotify.EVENTS
     w.start()
@@ -149,7 +151,7 @@ def test_watcher_falls_back_when_inotify_is_refused(tmp_path, monkeypatch):
 
 
 def test_registry_starts_in_poll_mode(tmp_path):
-    from dfdashboard.data.watch import RunRegistry
+    from dftracer.dashboard.data.watch import RunRegistry
 
     reg = RunRegistry(str(tmp_path), str(tmp_path / "idx"))
     assert reg.snapshot()["watch"] == fsnotify.POLL

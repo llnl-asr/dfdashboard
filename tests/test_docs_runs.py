@@ -1,7 +1,7 @@
 """The run-directory page must match the code that decides those rules.
 
 Reference prose drifts from the source it describes. These checks fail when the
-page and `dfdashboard.data.watch` or the CLI disagree, so a rename cannot land
+page and `dftracer.dashboard.data.watch` or the CLI disagree, so a rename cannot land
 silently.
 """
 
@@ -9,8 +9,8 @@ import contextlib
 import io
 import re
 
-from dfdashboard import cli
-from dfdashboard.data.watch import _FORMAT_DIRS, _MARKERS
+from dftracer.dashboard import cli
+from dftracer.dashboard.data.watch import _FORMAT_DIRS, _MARKERS
 
 PAGE = "docs/runs.rst"
 
@@ -61,7 +61,7 @@ def test_page_is_in_the_docs_tree():
 
 
 def test_page_quotes_the_engine_error_verbatim():
-    with open("dfdashboard/data/watch.py") as fh:
+    with open("python/dftracer/dashboard/data/watch.py") as fh:
         source = fh.read()
     assert "gzip" in source
     assert "must be gzip-compressed" in _page()

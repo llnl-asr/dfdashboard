@@ -18,10 +18,8 @@ Features
   families), with per-pid and per-node splits and per-host telemetry drawn on
   the node tracks.
 - Flamegraph and density overview for hot call paths and dead time.
-- Analysis dashboards built on Dask and Panel, embeddable next to the timeline
+- Analysis panels built on Dask and Panel, embeddable next to the timeline
   or on their own.
-- An embeddable notebook widget (anywidget) exposing the same timeline in
-  Jupyter over the widget comm.
 
 Architecture
 ------------
@@ -56,8 +54,8 @@ top:
 Building the frontend
 ---------------------
 
-The Python package ships the notebook widget bundle, but the browser SPA is
-built separately and served via ``--web-dist``:
+The wheel carries the built SPA, so an installed package needs no flag. A
+source checkout builds it once and serves it with ``--web-dist``:
 
 .. code-block:: bash
 

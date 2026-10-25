@@ -1,12 +1,12 @@
 #!/bin/bash
 # Publish wheels and HTML docs to the dldl workspace:
-#   pip install dfdashboard --find-links $DIST_ROOT/wheels        (tagged release)
-#   pip install --pre dfdashboard --find-links $DIST_ROOT/wheels  (develop build)
+#   pip install dftracer-dashboard --find-links $DIST_ROOT/wheels        (tagged release)
+#   pip install --pre dftracer-dashboard --find-links $DIST_ROOT/wheels  (develop build)
 set -eo pipefail
 cd "$CI_PROJECT_DIR"
 
 # The wheels dir is shared, so everything here is scoped to $PKG.
-PKG=dfdashboard
+PKG=dftracer_dashboard
 DIST_ROOT="${DFTRACER_DIST_ROOT:-/usr/workspace/dldl/dftracer/distributions}"
 KEEP_PRERELEASES="${DFTRACER_DIST_KEEP:-3}"
 WHEEL_DIR="${DIST_ROOT}/wheels"

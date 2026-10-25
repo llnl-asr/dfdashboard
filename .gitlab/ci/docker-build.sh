@@ -21,7 +21,7 @@ $PODMAN build -t "$TAG" .
 $PODMAN run --rm "$TAG" --help
 
 $PODMAN run --rm --entrypoint /bin/sh "$TAG" -c '
-  pkg=$(/opt/venv/bin/python -c "import dfdashboard, os; print(os.path.dirname(dfdashboard.__file__))")
+  pkg=$(/opt/venv/bin/python -c "import dftracer.dashboard, os; print(os.path.dirname(dftracer.dashboard.__file__))")
   test -s "$pkg/web_dist/index.html"
-  /opt/venv/bin/python -c "import dfdashboard.server"
+  /opt/venv/bin/python -c "import dftracer.dashboard.server"
 '

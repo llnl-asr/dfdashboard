@@ -165,7 +165,7 @@ function count(nodes: cytoscape.NodeCollection): [string, number][] {
   return [...m.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-export function ProvenanceView(props: { mode: "dark" | "light" }) {
+export function ProvenanceView(props: { mode: "dark" | "light"; scope: string }) {
   let host!: HTMLDivElement;
   let cy: cytoscape.Core | undefined;
   const [data, setData] = createSignal<ProvGraphResponse | null>(null);
@@ -847,7 +847,7 @@ export function ProvenanceView(props: { mode: "dark" | "light" }) {
 
   onMount(async () => {
     try {
-      const d = await fetchProvGraph({}, ctrl.signal);
+      const d = await fetchProvGraph({}, props.scope, ctrl.signal);
       setData(d);
       if (d.entities.length || d.activities.length) {
         build(d);

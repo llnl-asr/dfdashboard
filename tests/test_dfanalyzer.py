@@ -1,29 +1,19 @@
 import asyncio
-import gzip
 import os
 
 import pytest
+from traces import posix, write_trace  # noqa: E402
 
 pytest.importorskip("dftracer.analyzer")
 
-from dfdashboard.analysis._dfa import warmup  # noqa: E402
-from dfdashboard.analysis.base import RunContext  # noqa: E402
-from dfdashboard.analysis.pipelines import DFAnalyzerParams, DFAnalyzerPipeline  # noqa: E402
-from dfdashboard.compute.cluster import ClusterManager  # noqa: E402
+from dftracer.dashboard.analysis._dfa import warmup  # noqa: E402
+from dftracer.dashboard.analysis.base import RunContext  # noqa: E402
+from dftracer.dashboard.analysis.pipelines import DFAnalyzerParams, DFAnalyzerPipeline  # noqa: E402
+from dftracer.dashboard.compute.cluster import ClusterManager  # noqa: E402
 
 
 def _write_trace(directory: str) -> str:
-    lines: list[str] = []
-    base = 1_000_000
-    for i in range(32):
-        lines.append(
-            f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":{base + i * 100},'
-            f'"dur":10,"ph":"X","args":{{"ret":1024,"fhash":"f1"}}}}'
-        )
-    path = os.path.join(directory, "t.pfw.gz")
-    with gzip.open(path, "wt") as fh:
-        fh.write("\n".join(lines) + "\n")
-    return path
+    return write_trace(directory, posix(32, ret=1024, fhash="f1"))
 
 
 class _Data:

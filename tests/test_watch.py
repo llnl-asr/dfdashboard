@@ -8,10 +8,8 @@ import pytest
 
 pytest.importorskip("dftracer.utils")
 
-from fastapi.testclient import TestClient  # noqa: E402
-
-from dfdashboard.config import Settings  # noqa: E402
-from dfdashboard.data.watch import (  # noqa: E402
+from dftracer.dashboard.config import Settings  # noqa: E402
+from dftracer.dashboard.data.watch import (  # noqa: E402
     RunRegistry,
     group_runs,
     pick_set,
@@ -19,7 +17,8 @@ from dfdashboard.data.watch import (  # noqa: E402
     scan_sets,
     tail_record,
 )
-from dfdashboard.server import create_app  # noqa: E402
+from dftracer.dashboard.server import create_app  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
 BASE = 1_000_000
 
@@ -370,7 +369,7 @@ def test_unfinished_raw_keeps_the_compact_set_live(tmp_path):
 def test_end_check_falls_back_to_the_engine(tmp_path, monkeypatch):
     root = tmp_path / "runs"
     _write(str(root / "r" / "a.pfw.gz"), _records(end=True))
-    import dfdashboard.data.watch as watch
+    import dftracer.dashboard.data.watch as watch
 
     monkeypatch.setattr(watch, "tail_record", lambda *a, **k: None)
     reg = _registry(str(root), str(tmp_path / "idx"))

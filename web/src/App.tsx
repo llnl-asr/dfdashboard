@@ -8,13 +8,13 @@ import Analysis from "./analysis/Analysis";
 import { PanelEmbed } from "./ui/PanelCards";
 import { RangeFilter } from "./ui/RangeFilter";
 import { DashGrid, createDashboard, type DashLayout, type DashState } from "./ui/dashgrid";
+import { useRuns } from "./app/useRuns";
+import { ViewState } from "./app/viewstate";
 import {
+  ApiFailure,
   fetchCallTree,
   fetchHistogram,
   fetchInfo,
-  fetchRuns,
-  openRunsStream,
-  type RunInfo,
   fetchLayers,
   fetchOverviewDensity,
   fetchProcTree,
@@ -24,8 +24,6 @@ import {
   fetchVizBreaks,
   fetchVizStats,
   apiUrl,
-  clearRunScope,
-  currentRunScope,
   SINGLE_FILE,
 } from "./data/api";
 import { calleesTree, callersTree, functionList } from "./flame/sandwich";
@@ -50,7 +48,7 @@ import { SandwichView } from "./flame/SandwichView";
 import { FlameTooltip, type FlameHover } from "./flame/FlameTooltip";
 
 // In the VS Code webview with no server yet: show the load screen instead of
-// booting the (empty) timeline.
+// booting the (empty) vs.timeline.
 const NEEDS_LOAD = CONFIG.vscode && !CONFIG.apiBase;
 import { colorFor, sliceKey } from "./timeline/color";
 import { formatBytes, formatBytesPerSec, formatCounterValue, formatTime } from "./timeline/format";
@@ -173,12 +171,9 @@ function initialTheme(): "dark" | "light" {
     : "dark";
 }
 
-// Real name -> category from /viz/layers; empty until it loads.
-let LAYER_MAP: Record<string, string> = {};
-
 // Heuristic fallback for names the summary never saw.
-function layerOf(name: string): string {
-  const real = LAYER_MAP[name];
+function layerOf(map: Record<string, string>, name: string): string {
+  const real = map[name];
   if (real) return real;
   if (/^MPI_/.test(name)) return "MPI-IO";
   if (/^(fopen|fread|fwrite|fclose|fseek|fgets|fputs|fprintf)/.test(name)) return "STDIO";
@@ -224,59 +219,28 @@ function beginDragResize(e: MouseEvent, apply: (dy: number) => void): void {
 
 export default function App() {
   const source = createHttpSource();
+  const vs = new ViewState();
   let canvas!: HTMLCanvasElement;
   let minimap!: HTMLCanvasElement;
   let counterCanvas!: HTMLCanvasElement;
   let flameCanvas!: HTMLCanvasElement;
-  let flame: Flamegraph | undefined;
-  let flameInflight: AbortController | undefined;
-  let flameLoadedQuery: string | null = null;
-  let bottomFlame: Flamegraph | undefined;
-  let timeline: Timeline | undefined;
-  let inflight: AbortController | undefined;
-  let counterInflight: AbortController | undefined;
-  let overviewInflight: AbortController | undefined;
   // Cache the minimap overview per query so toggling a filter doesn't re-scan.
   const overviewCache = new Map<string, DensityBlock[]>();
 
   const [info, setInfo] = createSignal<InfoResponse | null>(null);
-  const [runs, setRuns] = createSignal<RunInfo[]>([]);
-  const [runsFeed, setRunsFeed] = createSignal<"off" | "live">("off");
-  const [watchMode, setWatchMode] = createSignal<"poll" | "events">("poll");
-  let runsSeq = -1;
-  let stopRuns: (() => void) | null = null;
+
+  // The run list, the scope and the stream that keeps both fresh.
+  const runs = useRuns({
+    state: vs,
+    timeline: () => vs.timeline,
+    baseTs: () => info()?.time_range?.min_timestamp_us ?? 0,
+    onNewFrame: () => {
+      if (atTail()) void refreshWindow();
+    },
+    onFirstTrace: () => void recoverFromWaiting(),
+  });
   // The first runs frame beats /api/info on every load, so a page can be open
   // when the first records land. It then runs the trace load in place.
-  let recovering = false;
-  let refreshing = false;
-  let refreshedAt = 0;
-  const activeRun = () => new URLSearchParams(location.search).get("run") || "";
-
-  // A tree can hold hundreds of runs, so the bar pins only the ones worth
-  // clicking and the rest move behind a filterable list.
-  const RUN_PIN_FINISHED = 2;
-  const RUN_LIST_MAX = 300;
-  const [runPicker, setRunPicker] = createSignal(false);
-  const [runFilter, setRunFilter] = createSignal("");
-  const pinnedRuns = () => {
-    const all = runs();
-    const live = all.filter((r) => r.state === "live" || r.state === "stalled");
-    const done = all.filter((r) => r.state !== "live" && r.state !== "stalled");
-    const keep = new Set([...live, ...done.slice(-RUN_PIN_FINISHED)].map((r) => r.id));
-    if (activeRun()) keep.add(activeRun());
-    return all.filter((r) => keep.has(r.id));
-  };
-  const hiddenRuns = () => runs().length - pinnedRuns().length;
-  const listedRuns = () => {
-    const q = runFilter().trim().toLowerCase();
-    const hits = q
-      ? runs().filter((r) =>
-          `${r.id} ${r.format} ${r.state} ${r.dir}`.toLowerCase().includes(q),
-        )
-      : runs();
-    return hits.slice(0, RUN_LIST_MAX);
-  };
-
   // Process tree, hosts and per-process io. Re-run when a run appears while the
   // page is open, otherwise the new pids have no host label.
   // Everything that needs /api/info, in one place: the boot and the recovery
@@ -291,17 +255,17 @@ export default function App() {
       return false;
     }
     setError(null);
-    totalSpan = span;
-    timeline?.setTotalSpan(span);
-    fetchVizBreaks()
+    vs.totalSpan = span;
+    vs.timeline?.setTotalSpan(span);
+    fetchVizBreaks(runs.scope())
       .then((br) => {
         if (br.valid_end && br.valid_end > (br.valid_start ?? 0)) {
-          timeline?.setTimingBounds(br.valid_start ?? 0, br.valid_end, br.max_life ?? 0);
+          vs.timeline?.setTimingBounds(br.valid_start ?? 0, br.valid_end, br.max_life ?? 0);
         }
         setMultiRun(br.multi_run);
         setTimelapse(false); // offer the toggle, but do not collapse gaps by default
         setBreaks(br.gaps);
-        timeline?.setBreaks(br.gaps, false);
+        vs.timeline?.setBreaks(br.gaps, false);
       })
       .catch(() => {});
     loadOverview();
@@ -313,10 +277,10 @@ export default function App() {
   // Retry once if empty: the first request may race the summary build.
   async function loadLayers(retry: boolean): Promise<void> {
     try {
-      const r = await fetchLayers();
+      const r = await fetchLayers(runs.scope());
       setFileCounts({ total: r.total_files, io: r.io_files });
       if (Object.keys(r.layers).length) {
-        LAYER_MAP = r.layers;
+        vs.layerMap = r.layers;
         setLayerCats([...new Set(Object.values(r.layers))].sort());
       } else if (retry) setTimeout(() => void loadLayers(false), 1500);
     } catch {
@@ -325,24 +289,24 @@ export default function App() {
   }
 
   async function recoverFromWaiting(): Promise<void> {
-    if (recovering) return;
-    recovering = true;
+    if (vs.recovering) return;
+    vs.recovering = true;
     try {
-      const i = await fetchInfo();
+      const i = await fetchInfo(runs.scope());
       setInfo(i);
       setLoading(false);
       await loadTrace(i);
     } catch {
       /* still empty; the next runs frame retries */
     } finally {
-      recovering = false;
+      vs.recovering = false;
     }
   }
 
   function loadProcs(): void {
-      fetchProcTree()
+      fetchProcTree(runs.scope())
         .then((pt) => {
-          timeline?.setProcTree(pt.nodes);
+          vs.timeline?.setProcTree(pt.nodes);
           setOvProcs(
             pt.nodes.map((n) => ({
               pid: n.pid,
@@ -363,12 +327,12 @@ export default function App() {
             labels.set(String(n.pid), hasRank ? `rank ${n.rank}` : `proc ${n.pid}`);
             if (hasRank) ranks.set(String(n.pid), n.rank as string);
           }
-          timeline?.setHosts(hosts);
-          timeline?.setBytes(bytes);
-          timeline?.setIoBusy(ioBusy);
-          timeline?.setProcessLabels(labels);
+          vs.timeline?.setHosts(hosts);
+          vs.timeline?.setBytes(bytes);
+          vs.timeline?.setIoBusy(ioBusy);
+          vs.timeline?.setProcessLabels(labels);
           setProcRank(ranks);
-          setGaps(timeline?.topGaps(15) ?? []); // relabel with resolved ranks
+          setGaps(vs.timeline?.topGaps(15) ?? []); // relabel with resolved ranks
           loadKpis(new Set(pt.nodes.map((n) => n.pid)).size);
         })
         .catch(() => loadKpis(0));
@@ -381,33 +345,33 @@ export default function App() {
     // relayouts every lane and reads as a flicker, so at most one refresh per
     // two seconds, and never while one is still in flight.
     const now = performance.now();
-    if (refreshing || now - refreshedAt < 2000) return;
-    refreshing = true;
-    refreshedAt = now;
+    if (vs.refreshing || now - vs.refreshedAt < 2000) return;
+    vs.refreshing = true;
+    vs.refreshedAt = now;
     try {
-      const i = await fetchInfo();
+      const i = await fetchInfo(runs.scope());
       setInfo(i);
       const tr = i.time_range;
       if (tr) {
         const span = tr.max_timestamp_us - tr.min_timestamp_us;
         if (span > 0) {
-          totalSpan = span;
-          timeline?.setTotalSpan(span);
+          vs.totalSpan = span;
+          vs.timeline?.setTotalSpan(span);
         }
       }
     } catch (err) {
       // A scoped run can be wiped while the page is open; drop the scope so the
       // next frame loads the union instead of failing forever.
-      if ((err as Error).message.includes("no run:") && currentRunScope()) {
-        clearRunScope();
-        refreshing = false;
-        refreshedAt = 0;
+      if ((err as ApiFailure).code === "no_such_run" && runs.scope()) {
+        runs.dropScope();
+        vs.refreshing = false;
+        vs.refreshedAt = 0;
         window.setTimeout(() => void refreshWindow(), 0);
         return;
       }
       /* the trace may be mid-write; the next frame retries */
     } finally {
-      refreshing = false;
+      vs.refreshing = false;
     }
     loadProcs();
     const v = tlView();
@@ -419,36 +383,9 @@ export default function App() {
   function atTail(): boolean {
     const v = tlView();
     if (v.end === 0) return true;
-    return v.end >= totalSpan * 0.98;
+    return v.end >= vs.totalSpan * 0.98;
   }
 
-  function pushRunsToTimeline(list: RunInfo[]) {
-    const base = info()?.time_range?.min_timestamp_us ?? 0;
-    timeline?.setRuns(
-      list.map((r) => ({
-        id: r.id,
-        state: r.state,
-        begin: Math.max(0, r.first_ts - base),
-        end: Math.max(0, r.last_ts - base),
-      })),
-    );
-  }
-
-  function applyRuns(frame: { seq: number; runs: RunInfo[]; watch?: "poll" | "events" }): boolean {
-    setRuns(frame.runs);
-    if (frame.watch) setWatchMode(frame.watch);
-    pushRunsToTimeline(frame.runs);
-    if (frame.seq === runsSeq) return false;
-    runsSeq = frame.seq;
-    return true;
-  }
-
-  function selectRun(id: string) {
-    const p = new URLSearchParams(location.search);
-    if (id) p.set("run", id);
-    else p.delete("run");
-    location.search = p.toString();
-  }
   const [meta, setMeta] = createSignal<VizMetadata | null>(null);
   const [loading, setLoading] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
@@ -475,7 +412,6 @@ export default function App() {
   const dashInit = readDashInit();
   const [currentDash, setCurrentDash] = createSignal(dashInit.name);
   const [dashNames, setDashNames] = createSignal<string[]>([dashInit.name]);
-  let dashSaveTimer: number | undefined;
   const persistDash = (s: DashState) => {
     const name = currentDash();
     try {
@@ -483,8 +419,8 @@ export default function App() {
     } catch {
       // ignore
     }
-    clearTimeout(dashSaveTimer);
-    dashSaveTimer = window.setTimeout(() => {
+    clearTimeout(vs.dashSaveTimer);
+    vs.dashSaveTimer = window.setTimeout(() => {
       fetch(apiUrl(`/api/dashboard/put/${encodeURIComponent(name)}`), {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -626,8 +562,6 @@ export default function App() {
   // Top event types card, which re-queries on filter change.
   const [topEvBusy, setTopEvBusy] = createSignal(false);
   const [ovTopEvents, setOvTopEvents] = createSignal<{ name: string; count: number }[]>([]);
-  let topEvInflight: AbortController | undefined;
-  let topEvTimer: number | undefined;
   createEffect(() => {
     if (view() !== "overview" || ovSpan() <= 0) return;
     const b = ovBegin();
@@ -635,12 +569,10 @@ export default function App() {
     const q = composedQuery();
     refreshNonce();
     setTopEvBusy(true);
-    clearTimeout(topEvTimer);
-    topEvTimer = window.setTimeout(() => {
-      topEvInflight?.abort();
-      const ac = new AbortController();
-      topEvInflight = ac;
-      fetchVizStats(b, e, q, "name", ac.signal)
+    clearTimeout(vs.topEvTimer);
+    vs.topEvTimer = window.setTimeout(() => {
+            const ac = vs.inflight.start("topEvents");
+      fetchVizStats(b, e, q, runs.scope(), "name", ac.signal)
         .then((s) => {
           if (ac.signal.aborted) return;
           setOvTopEvents(
@@ -700,7 +632,7 @@ export default function App() {
         <section class="ov-card">
           <div class="ov-card-head">
             <h3>Runs</h3>
-            <span class="ov-sub">{runs().length.toLocaleString()} runs</span>
+            <span class="ov-sub">{runs.list().length.toLocaleString()} runs</span>
           </div>
           <div class="ov-runs">
             <div class="ov-runs-head">
@@ -713,15 +645,15 @@ export default function App() {
               <span class="num">span</span>
             </div>
             <For
-              each={runs().slice(-OV_RUNS_ROWS).reverse()}
+              each={runs.list().slice(-OV_RUNS_ROWS).reverse()}
               fallback={<div class="ov-empty">Waiting for the first trace records</div>}
             >
               {(r) => (
                 <button
                   class="ov-runs-row"
-                  classList={{ active: activeRun() === r.id }}
+                  classList={{ active: runs.scope() === r.id }}
                   title={`${r.dir} · ${r.reason}`}
-                  onClick={() => selectRun(r.id === activeRun() ? "" : r.id)}
+                  onClick={() => runs.select(r.id === runs.scope() ? "" : r.id)}
                 >
                   <span class="ov-runs-id">{r.id}</span>
                   <span>{r.format}</span>
@@ -751,7 +683,7 @@ export default function App() {
                   title="zoom to this gap"
                   onClick={() => {
                     setSearchParams({ view: "timeline" });
-                    requestAnimationFrame(() => timeline?.focusRange(g.t0, g.t1));
+                    requestAnimationFrame(() => vs.timeline?.focusRange(g.t0, g.t1));
                   }}
                 >
                   <span class="ov-list-name">at {formatTime(g.t0)}</span>
@@ -778,11 +710,11 @@ export default function App() {
   function applyTheme(m: "dark" | "light", persist = false) {
     setTheme(m);
     document.documentElement.dataset.theme = m;
-    timeline?.setTheme(m);
-    flame?.setTheme(m);
-    bottomFlame?.setTheme(m);
-    inspCallersFg?.setTheme(m);
-    inspCalleesFg?.setTheme(m);
+    vs.timeline?.setTheme(m);
+    vs.flame?.setTheme(m);
+    vs.bottomFlame?.setTheme(m);
+    vs.inspCallersFg?.setTheme(m);
+    vs.inspCalleesFg?.setTheme(m);
     if (persist) {
       try {
         localStorage.setItem(THEME_KEY, m);
@@ -794,10 +726,10 @@ export default function App() {
 
   createEffect(() => {
     const t = anFlameTree();
-    if (bottomTab() === "calltree") bottomFlame?.setTree(t);
+    if (bottomTab() === "calltree") vs.bottomFlame?.setTree(t);
   });
-  createEffect(() => inspCallersFg?.setTree(inspCallersRoot()));
-  createEffect(() => inspCalleesFg?.setTree(inspCalleesRoot()));
+  createEffect(() => vs.inspCallersFg?.setTree(inspCallersRoot()));
+  createEffect(() => vs.inspCalleesFg?.setTree(inspCalleesRoot()));
   const [flameLoading, setFlameLoading] = createSignal(false);
   const [flameHover, setFlameHover] = createSignal<FlameHover | null>(null);
   const [bottomFlameHover, setBottomFlameHover] = createSignal<FlameHover | null>(null);
@@ -834,7 +766,7 @@ export default function App() {
     const cur = dockLane();
     if (cur?.id === id) {
       setDockLane(null);
-      timeline?.clearLaneCounter();
+      vs.timeline?.clearLaneCounter();
     } else {
       setDockLane({ id, color });
     }
@@ -869,17 +801,17 @@ export default function App() {
     setNodeStrip(names[(names.indexOf(nodeStrip()) + 1) % names.length]);
   };
   createEffect(() => {
-    // Read deps before the optional call: `timeline?.f(args)` skips evaluating
+    // Read deps before the optional call: `vs.timeline?.f(args)` skips evaluating
     // args while timeline is undefined, which would leave the effect untracked.
     const label = nodeStripNames().length ? nodeStrip() : null;
-    timeline?.setNodeStripLabel(label);
+    vs.timeline?.setNodeStripLabel(label);
   });
   createEffect(() => {
     const res = nodeCounterData();
     const name = nodeStrip();
     if (!res) return;
     if (name === "off") {
-      timeline?.clearNodeCounters();
+      vs.timeline?.clearNodeCounters();
       return;
     }
     // Percent counters stack against 100 (idle/free omitted = utilization);
@@ -926,8 +858,8 @@ export default function App() {
       );
     }
     if (byHost.size)
-      timeline?.setNodeCounters(res.begin, res.bucket_us, res.buckets, byHost, scale);
-    else timeline?.clearNodeCounters();
+      vs.timeline?.setNodeCounters(res.begin, res.bucket_us, res.buckets, byHost, scale);
+    else vs.timeline?.clearNodeCounters();
   });
   createEffect(() => {
     const res = dockSplit();
@@ -940,7 +872,7 @@ export default function App() {
       byPid.set(e.entity, e.values);
       if (e.max > max) max = e.max;
     }
-    timeline?.setLaneCounter(res.begin, res.bucket_us, res.buckets, byPid, d.color, max);
+    vs.timeline?.setLaneCounter(res.begin, res.bucket_us, res.buckets, byPid, d.color, max);
   });
   const [selected, setSelected] = createSignal<TraceEvent | null>(null);
   const [hover, setHover] = createSignal<HoverState | null>(null);
@@ -1002,43 +934,37 @@ export default function App() {
     if (group) loadAnalyze(group);
   }
   function loadAnFlame() {
-    if (totalSpan <= 0) return;
+    if (vs.totalSpan <= 0) return;
     const [b, e] = scopeRange();
     const q = appliedQuery();
     const key = `${q}|${Math.floor(b)}-${Math.ceil(e)}`;
-    if (anFlameKey === key && !anFlameLoading()) return;
-    anFlameInflight?.abort();
-    const ac = new AbortController();
-    anFlameInflight = ac;
+    if (vs.anFlameKey === key && !anFlameLoading()) return;
+        const ac = vs.inflight.start("anFlame");
     setAnFlameLoading(true);
-    fetchCallTree(b, e, q, false, ac.signal)
+    fetchCallTree(b, e, q, false, runs.scope(), ac.signal)
       .then((res) => {
         if (ac.signal.aborted) return;
-        anFlameKey = key;
+        vs.anFlameKey = key;
         setAnFlameTree(res.tree);
       })
       .catch((err) => {
         if ((err as Error).name !== "AbortError") setError((err as Error).message);
       })
       .finally(() => {
-        if (anFlameInflight === ac) {
+        if (vs.inflight.isCurrent("anFlame", ac)) {
           setAnFlameLoading(false);
-          anFlameInflight = undefined;
+          vs.inflight.abort("anFlame");
         }
       });
   }
   const [analyzeStats, setAnalyzeStats] = createSignal<SelectionStats | null>(null);
   const [analyzeLoading, setAnalyzeLoading] = createSignal(false);
-  let analyzeInflight: AbortController | undefined;
   const [eventLog, setEventLog] = createSignal<TraceEvent[] | null>(null);
   const [eventLogLoading, setEventLogLoading] = createSignal(false);
   const [eventLogTruncated, setEventLogTruncated] = createSignal(false);
-  let eventLogInflight: AbortController | undefined;
   // Separate from the Flamegraph view's tree so the two never clobber.
   const [anFlameTree, setAnFlameTree] = createSignal<FlameNode | null>(null);
   const [anFlameLoading, setAnFlameLoading] = createSignal(false);
-  let anFlameInflight: AbortController | undefined;
-  let anFlameKey: string | null = null;
   const isFlameTab = () => bottomTab() === "bottlenecks" || bottomTab() === "bottomup";
   // bottlenecks ranks by inclusive time, bottom-up by self (exclusive) time.
   const bottomFns = () => {
@@ -1054,14 +980,10 @@ export default function App() {
   const [distKey, setDistKey] = createSignal<string | null>(null);
   const [distHist, setDistHist] = createSignal<HistogramResponse | null>(null);
   const [distLoading, setDistLoading] = createSignal(false);
-  let distInflight: AbortController | undefined;
   const [inspHist, setInspHist] = createSignal<HistogramResponse | null>(null);
-  let inspInflight: AbortController | undefined;
   const [inspSwName, setInspSwName] = createSignal<string | null>(null);
   const [inspSwTree, setInspSwTree] = createSignal<FlameNode | null>(null);
   const [inspSwHover, setInspSwHover] = createSignal<FlameHover | null>(null);
-  let inspCallersFg: Flamegraph | undefined;
-  let inspCalleesFg: Flamegraph | undefined;
   const inspCallersRoot = () => {
     const t = inspSwTree();
     const n = inspSwName();
@@ -1073,8 +995,6 @@ export default function App() {
     return t && n ? calleesTree([t], n) : null;
   };
   // Cached per query, shared by every selection's sandwich to avoid refetching.
-  let inspTreeQuery: string | null = null;
-  let inspTreePromise: Promise<FlameNode | null> | null = null;
   let searchInput: HTMLInputElement | undefined;
   // Resolution maps accumulated from HH/FH metadata (persist across fetches;
   // metadata has no ts so it only arrives on the full-range load).
@@ -1097,7 +1017,7 @@ export default function App() {
   });
   const scopeRange = (): [number, number] => {
     const s = anScope();
-    return s ? [s.t0, s.t1] : [0, totalSpan];
+    return s ? [s.t0, s.t1] : [0, vs.totalSpan];
   };
   const scopeKey = () => {
     const s = anScope();
@@ -1115,29 +1035,25 @@ export default function App() {
   // viewport, so zooming/panning inside it needs no refetch (no data pop). We
   // only refetch when the viewport leaves the buffer, zooms in far enough that
   // the buffer is coarse, changes LOD, or the query changes.
-  let totalSpan = 1;
-  let loaded = { begin: 0, end: 0, summary: -1 };
   // Longest event duration seen so far; sent as `lookback` so the server also
   // returns events that started before the window but extend into it, without
   // scanning back to the start of the trace.
-  let maxDurSeen = 0;
-  let didAutoFit = false;
 
   function ensureData(begin: number, end: number, force = false) {
     const s = summary();
     const span = Math.max(1, end - begin);
-    const bufferSpan = loaded.end - loaded.begin;
+    const bufferSpan = vs.loaded.end - vs.loaded.begin;
     const insideBuffer =
       !force &&
-      s === loaded.summary &&
-      begin >= loaded.begin &&
-      end <= loaded.end &&
+      s === vs.loaded.summary &&
+      begin >= vs.loaded.begin &&
+      end <= vs.loaded.end &&
       bufferSpan <= span * 4; // buffer not so wide the detail is stale
     if (insideBuffer) return;
     const margin = span; // 1x overscan each side (3x window)
     const fb = Math.max(0, begin - margin);
-    const fe = Math.min(totalSpan, end + margin);
-    loaded = { begin: fb, end: fe, summary: s };
+    const fe = Math.min(vs.totalSpan, end + margin);
+    vs.loaded = { begin: fb, end: fe, summary: s };
     requestData(fb, fe);
   }
 
@@ -1145,21 +1061,19 @@ export default function App() {
   // the mipmap when unfiltered) and re-fetched whenever the query changes so the
   // minimap matches the filtered tracks. Best-effort; supersedes in flight.
   function loadOverview() {
-    if (totalSpan <= 0) return;
-    overviewInflight?.abort();
+    if (vs.totalSpan <= 0) return;
     const key = appliedQuery();
     const cached = overviewCache.get(key);
     if (cached) {
-      timeline?.setOverview(cached);
+      vs.timeline?.setOverview(cached);
       return;
     }
-    const ac = new AbortController();
-    overviewInflight = ac;
-    fetchOverviewDensity(totalSpan, key, timeline?.viewportWidth(), ac.signal)
+    const ac = vs.inflight.start("overview");
+    fetchOverviewDensity(vs.totalSpan, key, vs.timeline?.viewportWidth(), runs.scope(), ac.signal)
       .then((density) => {
         if (ac.signal.aborted) return;
         overviewCache.set(key, density);
-        timeline?.setOverview(density);
+        vs.timeline?.setOverview(density);
       })
       .catch(() => {});
   }
@@ -1169,30 +1083,28 @@ export default function App() {
   const flameGrouped = () => (view() === "sandwich" ? true : byProcess());
 
   function loadFlame() {
-    if (totalSpan <= 0) return;
+    if (vs.totalSpan <= 0) return;
     const q = appliedQuery();
     const grouped = flameGrouped();
     const key = `${q}|${grouped ? "p" : ""}`;
-    if (flameLoadedQuery === key && !flameLoading()) return;
-    flameInflight?.abort();
-    const ac = new AbortController();
-    flameInflight = ac;
+    if (vs.flameLoadedQuery === key && !flameLoading()) return;
+        const ac = vs.inflight.start("flame");
     setFlameLoading(true);
-    fetchCallTree(0, totalSpan, q, grouped, ac.signal)
+    fetchCallTree(0, vs.totalSpan, q, grouped, runs.scope(), ac.signal)
       .then((res) => {
         if (ac.signal.aborted) return;
-        flameLoadedQuery = key;
+        vs.flameLoadedQuery = key;
         setFlameTreeGrouped(grouped);
         setFlameTree(res.tree);
-        flame?.setTree(res.tree);
+        vs.flame?.setTree(res.tree);
       })
       .catch((err) => {
         if ((err as Error).name !== "AbortError") setError((err as Error).message);
       })
       .finally(() => {
-        if (flameInflight === ac) {
+        if (vs.inflight.isCurrent("flame", ac)) {
           setFlameLoading(false);
-          flameInflight = undefined;
+          vs.inflight.abort("flame");
         }
       });
   }
@@ -1202,7 +1114,7 @@ export default function App() {
   function loadKpis(procs: number) {
     const i = info();
     setKpis({
-      wall: totalSpan,
+      wall: vs.totalSpan,
       totalIO: i?.total_bytes ?? 0,
       ioShare: i?.io_share ?? 0,
       procs,
@@ -1210,14 +1122,12 @@ export default function App() {
   }
 
   function loadInspHist(name: string) {
-    inspInflight?.abort();
-    const ac = new AbortController();
-    inspInflight = ac;
+        const ac = vs.inflight.start("inspHist");
     setInspHist(null);
     const esc = name.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
     const q = appliedQuery();
     const pred = `name == "${esc}"`;
-    fetchHistogram(0, totalSpan, q ? `(${q}) and ${pred}` : pred, ac.signal)
+    fetchHistogram(0, vs.totalSpan, q ? `(${q}) and ${pred}` : pred, runs.scope(), ac.signal)
       .then((r) => {
         if (!ac.signal.aborted) setInspHist(r);
       })
@@ -1226,12 +1136,12 @@ export default function App() {
 
   function ensureInspTree(): Promise<FlameNode | null> {
     const q = appliedQuery();
-    if (inspTreeQuery === q && inspTreePromise) return inspTreePromise;
-    inspTreeQuery = q;
-    inspTreePromise = fetchCallTree(0, totalSpan, q, false)
+    if (vs.inspTreeQuery === q && vs.inspTreePromise) return vs.inspTreePromise;
+    vs.inspTreeQuery = q;
+    vs.inspTreePromise = fetchCallTree(0, vs.totalSpan, q, false, runs.scope())
       .then((r) => r.tree)
       .catch(() => null);
-    return inspTreePromise;
+    return vs.inspTreePromise;
   }
 
   async function loadInspSandwich(name: string) {
@@ -1294,9 +1204,7 @@ export default function App() {
   });
 
   async function requestData(begin: number, end: number) {
-    inflight?.abort();
-    const ac = new AbortController();
-    inflight = ac;
+    const ac = vs.inflight.start("slices");
     setLoading(true);
     setError(null);
     // Slices stream in one Arrow batch per file; accumulate across batches.
@@ -1309,16 +1217,17 @@ export default function App() {
           end,
           summary: summary(),
           query: appliedQuery(),
-          lookback: maxDurSeen,
-          width: timeline?.viewportWidth(),
+          lookback: vs.maxDurSeen,
+          width: vs.timeline?.viewportWidth(),
         },
+        runs.scope(),
         (b) => {
           if (ac.signal.aborted) return;
           events.push(...b.events);
           density.push(...b.density);
           for (const e of b.events) {
             const d = Number(e.dur);
-            if (Number.isFinite(d) && d > maxDurSeen) maxDurSeen = d;
+            if (Number.isFinite(d) && d > vs.maxDurSeen) vs.maxDurSeen = d;
           }
         },
         ac.signal,
@@ -1326,7 +1235,7 @@ export default function App() {
       if (ac.signal.aborted) return;
       // Paint once: setData relayouts every lane, so per-batch painting would
       // thrash the whole gutter. The stream still cuts latency and scans once.
-      timeline?.setData(events, density);
+      vs.timeline?.setData(events, density);
       setMeta({
         begin,
         end,
@@ -1339,7 +1248,7 @@ export default function App() {
 
       // Single-file view: the file's data may be a tiny sliver of the global
       // (multi-node) span, so fit the viewport to it on first load.
-      if (SINGLE_FILE && !didAutoFit) {
+      if (SINGLE_FILE && !vs.autoFitted) {
         let lo = Infinity;
         let hi = -Infinity;
         for (const e of events) {
@@ -1353,21 +1262,19 @@ export default function App() {
           lo = Math.min(lo, b.ts);
           hi = Math.max(hi, b.ts + (Number(b.dur) || 0));
         }
-        if (Number.isFinite(lo) && hi > lo && hi - lo < totalSpan * 0.9) {
-          didAutoFit = true;
-          timeline?.focusRange(lo, hi);
+        if (Number.isFinite(lo) && hi > lo && hi - lo < vs.totalSpan * 0.9) {
+          vs.autoFitted = true;
+          vs.timeline?.focusRange(lo, hi);
         }
       }
 
       // Counter track (bandwidth) for the same window; fire-and-forget so it
       // never blocks the slice data.
-      counterInflight?.abort();
-      const cac = new AbortController();
-      counterInflight = cac;
-      fetchVizCounters(begin, end, appliedQuery(), 1200, cac.signal)
+            const cac = vs.inflight.start("counters");
+      fetchVizCounters(begin, end, appliedQuery(), 1200, runs.scope(), cac.signal)
         .then((c) => {
           if (!cac.signal.aborted)
-            timeline?.setCounters(c.begin, c.bucket_us, c.read_bytes, c.write_bytes);
+            vs.timeline?.setCounters(c.begin, c.bucket_us, c.read_bytes, c.write_bytes);
         })
         .catch(() => {});
 
@@ -1413,16 +1320,16 @@ export default function App() {
         const host = hh.get(hash);
         if (host) hosts.set(Number(pid), host);
       }
-      timeline?.setHosts(hosts);
-      setGaps(timeline?.topGaps(15) ?? []);
+      vs.timeline?.setHosts(hosts);
+      setGaps(vs.timeline?.topGaps(15) ?? []);
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
-      loaded.summary = -1; // invalidate buffer so we retry on next change
+      vs.loaded.summary = -1; // invalidate buffer so we retry on next change
       setError((err as Error).message);
     } finally {
-      if (inflight === ac) {
+      if (vs.inflight.isCurrent("slices", ac)) {
         setLoading(false);
-        inflight = undefined;
+        vs.inflight.abort("slices");
       }
     }
   }
@@ -1437,14 +1344,14 @@ export default function App() {
   function clearSelection() {
     if (anScope() === null) return;
     setAnScope(null);
-    timeline?.clearSelection();
+    vs.timeline?.clearSelection();
     if (sidebarOpen()) reloadBottom();
   }
 
   function afterQueryChange() {
     loadOverview();
     if (view() === "flamegraph" || view() === "sandwich") loadFlame();
-    const vp = timeline?.getViewport();
+    const vp = vs.timeline?.getViewport();
     if (vp) ensureData(vp.begin, vp.end, true);
   }
 
@@ -1474,19 +1381,19 @@ export default function App() {
 
   function doSearch(term: string) {
     setSearchTerm(term);
-    setMatchCount(timeline?.setSearch(term) ?? 0);
+    setMatchCount(vs.timeline?.setSearch(term) ?? 0);
     setMatchPos(0);
   }
 
   function navMatch(dir: 1 | -1) {
-    if (matchCount() > 0) setMatchPos(timeline?.focusMatch(dir) ?? 0);
+    if (matchCount() > 0) setMatchPos(vs.timeline?.focusMatch(dir) ?? 0);
   }
 
   async function loadAnalyze(tab: "name" | "file" | "pid" | "cat") {
     setAnalyzeTab(tab);
     setDistKey(null);
     setDistHist(null);
-    analyzeInflight?.abort();
+    vs.inflight.abort("analyze");
     const cacheKey = `${appliedQuery()}|${tab}|${scopeKey()}`;
     const cached = analyzeCache.get(cacheKey);
     if (cached) {
@@ -1494,13 +1401,12 @@ export default function App() {
       setAnalyzeLoading(false);
       return;
     }
-    const ac = new AbortController();
-    analyzeInflight = ac;
+    const ac = vs.inflight.start("analyze");
     setAnalyzeLoading(true);
     try {
       const group = tab === "file" ? "fhash" : tab;
       const [b, e] = scopeRange();
-      const res = await fetchVizStats(b, e, appliedQuery(), group, ac.signal);
+      const res = await fetchVizStats(b, e, appliedQuery(), runs.scope(), group, ac.signal);
       if (!ac.signal.aborted) {
         analyzeCache.set(cacheKey, res);
         setAnalyzeStats(res);
@@ -1508,22 +1414,21 @@ export default function App() {
     } catch (err) {
       if ((err as Error).name !== "AbortError") setError((err as Error).message);
     } finally {
-      if (analyzeInflight === ac) {
+      if (vs.inflight.isCurrent("analyze", ac)) {
         setAnalyzeLoading(false);
-        analyzeInflight = undefined;
+        vs.inflight.abort("analyze");
       }
     }
   }
 
   async function loadEventLog() {
-    eventLogInflight?.abort();
-    const ac = new AbortController();
-    eventLogInflight = ac;
+        const ac = vs.inflight.start("eventLog");
     setEventLogLoading(true);
     try {
       const [b, e] = scopeRange();
       const res = await fetchViz(
         { begin: b, end: e, summary: 1, query: appliedQuery(), limit: 1000 },
+        runs.scope(),
         ac.signal,
       );
       if (!ac.signal.aborted) {
@@ -1535,9 +1440,9 @@ export default function App() {
     } catch (err) {
       if ((err as Error).name !== "AbortError") setError((err as Error).message);
     } finally {
-      if (eventLogInflight === ac) {
+      if (vs.inflight.isCurrent("eventLog", ac)) {
         setEventLogLoading(false);
-        eventLogInflight = undefined;
+        vs.inflight.abort("eventLog");
       }
     }
   }
@@ -1565,23 +1470,21 @@ export default function App() {
     const pred = distPredicate(analyzeTab(), raw);
     if (!pred) return;
     setDistKey(raw);
-    distInflight?.abort();
-    const ac = new AbortController();
-    distInflight = ac;
+        const ac = vs.inflight.start("dist");
     setDistLoading(true);
     setDistHist(null);
     const q = appliedQuery();
     const combined = q ? `(${q}) and ${pred}` : pred;
     try {
       const [b, e] = scopeRange();
-      const res = await fetchHistogram(b, e, combined, ac.signal);
+      const res = await fetchHistogram(b, e, combined, runs.scope(), ac.signal);
       if (!ac.signal.aborted) setDistHist(res);
     } catch (err) {
       if ((err as Error).name !== "AbortError") setError((err as Error).message);
     } finally {
-      if (distInflight === ac) {
+      if (vs.inflight.isCurrent("dist", ac)) {
         setDistLoading(false);
-        distInflight = undefined;
+        vs.inflight.abort("dist");
       }
     }
   }
@@ -1597,7 +1500,7 @@ export default function App() {
   }
 
   onMount(async () => {
-    timeline = new Timeline(canvas, {
+    vs.timeline = new Timeline(canvas, {
       onRangeChange: (b, e) => {
         ensureData(b, e);
         setTlView({ begin: b, end: e });
@@ -1630,10 +1533,10 @@ export default function App() {
       onSelectRange: (t0, t1) => requestSelection(t0, t1),
       onSelectRangeClear: () => clearSelection(),
     });
-    timeline.setHideMalformed(!showMalformed());
-    timeline.attachMinimap(minimap);
-    timeline.attachCounters(counterCanvas);
-    flame = new Flamegraph(flameCanvas, {
+    vs.timeline.setHideMalformed(!showMalformed());
+    vs.timeline.attachMinimap(minimap);
+    vs.timeline.attachCounters(counterCanvas);
+    vs.flame = new Flamegraph(flameCanvas, {
       onHover: (node, pct, x, y) => setFlameHover(node ? { node, pct, x, y } : null),
     });
     window.addEventListener("keydown", onGlobalKey);
@@ -1658,37 +1561,21 @@ export default function App() {
       });
     }
     if (NEEDS_LOAD) return; // no server yet; the load screen is shown instead
-    // Runs come first: the strip must work while the tree is still empty.
-    // A run named in the URL may be gone (tree wiped or a run directory
-    // renamed), so settle the scope against the live list before asking for
-    // window data, which would otherwise 404 with "no run: <id>".
-    const bootRuns = await fetchRuns().catch(() => null);
-    if (bootRuns) {
-      applyRuns(bootRuns);
-      if (currentRunScope() && !bootRuns.runs.some((r) => r.id === currentRunScope())) {
-        clearRunScope();
-      }
-    }
-    stopRuns = openRunsStream((f) => {
-      setRunsFeed("live");
-      const first = info() === null && f.runs.length > 0;
-      if (applyRuns(f) && !first && atTail()) void refreshWindow();
-      if (first) void recoverFromWaiting(); // the trace just appeared
-    });
+    await runs.attach(); // the strip works while the tree is still empty
     setLoading(true); // show activity during the initial info scan, before slices stream
     try {
-      const i = await fetchInfo();
+      const i = await fetchInfo(runs.scope());
       setInfo(i);
       await loadTrace(i);
     } catch (err) {
       const msg = (err as Error).message;
-      if (msg.includes("no run:") && currentRunScope()) {
-        clearRunScope();
+      if ((err as ApiFailure).code === "no_such_run" && runs.scope()) {
+        runs.dropScope();
         location.reload(); // one reload, and the URL no longer names the run
         return;
       }
       setError(
-        msg.includes("waiting for the first records")
+        (err as ApiFailure).code === "no_trace_yet"
           ? "Waiting for the first trace records. This page updates by itself."
           : `Failed to load /api/info: ${msg}`,
       );
@@ -1714,18 +1601,13 @@ export default function App() {
   }
 
   onCleanup(() => {
-    inflight?.abort();
-    counterInflight?.abort();
-    analyzeInflight?.abort();
-    flameInflight?.abort();
-    anFlameInflight?.abort();
     window.removeEventListener("keydown", onGlobalKey);
-    stopRuns?.();
-    timeline?.destroy();
-    flame?.destroy();
-    bottomFlame?.destroy();
-    inspCallersFg?.destroy();
-    inspCalleesFg?.destroy();
+    vs.timeline?.destroy();
+    vs.flame?.destroy();
+    vs.bottomFlame?.destroy();
+    vs.inspCallersFg?.destroy();
+    vs.inspCalleesFg?.destroy();
+    vs.dispose(); // every request, the runs feed and the timers
   });
 
   return (
@@ -1842,7 +1724,7 @@ export default function App() {
                     checked={fullDetail()}
                     onChange={(e) => {
                       setFullDetail(e.currentTarget.checked);
-                      const vp = timeline?.getViewport();
+                      const vp = vs.timeline?.getViewport();
                       if (vp) ensureData(vp.begin, vp.end, true);
                     }}
                   />
@@ -1863,7 +1745,7 @@ export default function App() {
                   onClick={() => {
                     const v = !showGaps();
                     setShowGaps(v);
-                    timeline?.setShowGaps(v);
+                    vs.timeline?.setShowGaps(v);
                   }}
                 >
                   Gaps
@@ -1876,7 +1758,7 @@ export default function App() {
                   onClick={() => {
                     const v = !showMalformed();
                     setShowMalformed(v);
-                    timeline?.setHideMalformed(!v);
+                    vs.timeline?.setHideMalformed(!v);
                   }}
                 >
                   Bad timing
@@ -1890,7 +1772,7 @@ export default function App() {
                     onClick={() => {
                       const v = !timelapse();
                       setTimelapse(v);
-                      timeline?.setTimelapse(v);
+                      vs.timeline?.setTimelapse(v);
                     }}
                   >
                     Timelapse
@@ -1903,7 +1785,7 @@ export default function App() {
                   onChange={(e) => {
                     const v = e.currentTarget.value as "category" | "size" | "latency";
                     setColorBy(v);
-                    timeline?.setColorMode(v);
+                    vs.timeline?.setColorMode(v);
                   }}
                 >
                   <option value="category">color: category</option>
@@ -1951,7 +1833,7 @@ export default function App() {
                   type="button"
                   class="ghost"
                   onClick={() =>
-                    view() === "flamegraph" ? flame?.resetFocus() : timeline?.resetView()
+                    view() === "flamegraph" ? vs.flame?.resetFocus() : vs.timeline?.resetView()
                   }
                 >
                   Reset
@@ -1967,29 +1849,29 @@ export default function App() {
               </button>
             </header>
           </Show>
-          <Show when={runs().length > 0}>
+          <Show when={runs.list().length > 0}>
             <div class="runs-bar">
               <button
                 type="button"
                 class="run-chip"
-                classList={{ active: activeRun() === "" }}
-                onClick={() => selectRun("")}
+                classList={{ active: runs.scope() === "" }}
+                onClick={() => runs.select("")}
               >
                 all runs
               </button>
-              <For each={pinnedRuns()}>
+              <For each={runs.pinned()}>
                 {(r) => (
                   <button
                     type="button"
                     class="run-chip"
                     classList={{
-                      active: activeRun() === r.id,
+                      active: runs.scope() === r.id,
                       live: r.state === "live",
                       done: r.state === "done",
                       stalled: r.state === "stalled",
                     }}
                     title={`${r.dir} · ${r.format} · ${r.reason} · ${r.files} files`}
-                    onClick={() => selectRun(r.id === activeRun() ? "" : r.id)}
+                    onClick={() => runs.select(r.id === runs.scope() ? "" : r.id)}
                   >
                     <span class="run-state" />
                     <span class="run-id">{r.id}</span>
@@ -1999,56 +1881,56 @@ export default function App() {
                   </button>
                 )}
               </For>
-              <Show when={hiddenRuns() > 0}>
+              <Show when={runs.hidden() > 0}>
                 <button
                   type="button"
                   class="run-chip more"
                   title="show every run"
-                  onClick={() => setRunPicker(!runPicker())}
+                  onClick={() => runs.setPicker(!runs.picker())}
                 >
-                  +{hiddenRuns().toLocaleString()} more
+                  +{runs.hidden().toLocaleString()} more
                 </button>
               </Show>
-              <span class="runs-count">{runs().length.toLocaleString()} runs</span>
-              <Show when={runsFeed() === "live"}>
+              <span class="runs-count">{runs.list().length.toLocaleString()} runs</span>
+              <Show when={runs.feed() === "live"}>
                 <span
                   class="runs-feed"
-                  title={`live updates on /api/stream, tree watched by ${watchMode()}`}
+                  title={`live updates on /api/stream, tree watched by ${runs.watchMode()}`}
                 >
                   live
                 </span>
               </Show>
             </div>
-            <Show when={runPicker()}>
+            <Show when={runs.picker()}>
               <div class="runs-picker">
                 <div class="runs-picker-head">
                   <input
                     class="runs-filter"
                     placeholder="filter by id, format, state or path"
-                    value={runFilter()}
-                    onInput={(e) => setRunFilter(e.currentTarget.value)}
+                    value={runs.filter()}
+                    onInput={(e) => runs.setFilter(e.currentTarget.value)}
                     onKeyDown={(e) => {
-                      if (e.key === "Escape") setRunPicker(false);
+                      if (e.key === "Escape") runs.setPicker(false);
                     }}
                   />
                   <span class="runs-picker-note">
-                    {listedRuns().length.toLocaleString()} of {runs().length.toLocaleString()}
+                    {runs.listed().length.toLocaleString()} of {runs.list().length.toLocaleString()}
                   </span>
-                  <button class="ghost sm" onClick={() => setRunPicker(false)}>
+                  <button class="ghost sm" onClick={() => runs.setPicker(false)}>
                     x
                   </button>
                 </div>
                 <div class="runs-list">
-                  <For each={listedRuns()}>
+                  <For each={runs.listed()}>
                     {(r) => (
                       <button
                         type="button"
                         class="runs-row"
-                        classList={{ active: activeRun() === r.id }}
+                        classList={{ active: runs.scope() === r.id }}
                         title={r.dir}
                         onClick={() => {
-                          selectRun(r.id === activeRun() ? "" : r.id);
-                          setRunPicker(false);
+                          runs.select(r.id === runs.scope() ? "" : r.id);
+                          runs.setPicker(false);
                         }}
                       >
                         <span
@@ -2299,7 +2181,7 @@ export default function App() {
                                   >
                                     {name}
                                   </td>
-                                  <td class="op-layer">{String(e.cat || layerOf(name))}</td>
+                                  <td class="op-layer">{String(e.cat || layerOf(vs.layerMap, name))}</td>
                                   <td class="num">
                                     {String(e.pid)}/{String(e.tid)}
                                   </td>
@@ -2322,13 +2204,13 @@ export default function App() {
                     <div class="bottom-flame">
                       <canvas
                         ref={(el) => {
-                          bottomFlame?.destroy();
-                          bottomFlame = new Flamegraph(el, {
+                          vs.bottomFlame?.destroy();
+                          vs.bottomFlame = new Flamegraph(el, {
                             onHover: (node, pct, x, y) =>
                               setBottomFlameHover(node ? { node, pct, x, y } : null),
                           });
-                          bottomFlame.setTheme(theme());
-                          bottomFlame.setTree(anFlameTree());
+                          vs.bottomFlame.setTheme(theme());
+                          vs.bottomFlame.setTree(anFlameTree());
                         }}
                       />
                       <Show when={bottomFlameHover()}>{(h) => <FlameTooltip hover={h()} />}</Show>
@@ -2385,7 +2267,7 @@ export default function App() {
                                       >
                                         {n.name}
                                       </td>
-                                      <td class="op-layer">{layerOf(n.name)}</td>
+                                      <td class="op-layer">{layerOf(vs.layerMap, n.name)}</td>
                                       <td class="num">{formatTime(n.self)}</td>
                                       <td class="num">{formatTime(n.total)}</td>
                                       <td class="bar-col op-share">
@@ -2471,7 +2353,7 @@ export default function App() {
                                       </Show>
                                     </td>
                                     <td class="op-layer">
-                                      {analyzeTab() === "name" ? layerOf(n.name) : "-"}
+                                      {analyzeTab() === "name" ? layerOf(vs.layerMap, n.name) : "-"}
                                     </td>
                                     <td class="num">{formatTime(n.total)}</td>
                                     <td class="bar-col op-share">
@@ -2659,13 +2541,13 @@ export default function App() {
                           <div class="insp-sw-flame">
                             <canvas
                               ref={(el) => {
-                                inspCallersFg?.destroy();
-                                inspCallersFg = new Flamegraph(el, {
+                                vs.inspCallersFg?.destroy();
+                                vs.inspCallersFg = new Flamegraph(el, {
                                   onHover: (node, pct, x, y) =>
                                     setInspSwHover(node ? { node, pct, x, y } : null),
                                 });
-                                inspCallersFg.setTheme(theme());
-                                inspCallersFg.setTree(inspCallersRoot());
+                                vs.inspCallersFg.setTheme(theme());
+                                vs.inspCallersFg.setTree(inspCallersRoot());
                               }}
                             />
                           </div>
@@ -2677,13 +2559,13 @@ export default function App() {
                           <div class="insp-sw-flame">
                             <canvas
                               ref={(el) => {
-                                inspCalleesFg?.destroy();
-                                inspCalleesFg = new Flamegraph(el, {
+                                vs.inspCalleesFg?.destroy();
+                                vs.inspCalleesFg = new Flamegraph(el, {
                                   onHover: (node, pct, x, y) =>
                                     setInspSwHover(node ? { node, pct, x, y } : null),
                                 });
-                                inspCalleesFg.setTheme(theme());
-                                inspCalleesFg.setTree(inspCalleesRoot());
+                                vs.inspCalleesFg.setTheme(theme());
+                                vs.inspCalleesFg.setTree(inspCalleesRoot());
                               }}
                             />
                           </div>
@@ -2897,10 +2779,10 @@ export default function App() {
                       end={tlView().end || ovSpan()}
                       gutter={GUTTER}
                       tick={frameTick}
-                      frac={(t) => timeline?.frac(t) ?? 0}
-                      realAtFrac={(f) => timeline?.realAtFrac(f) ?? 0}
-                      onZoomRange={(t0, t1) => timeline?.focusRealRange(t0, t1)}
-                      onResetView={() => timeline?.resetView()}
+                      frac={(t) => vs.timeline?.frac(t) ?? 0}
+                      realAtFrac={(f) => vs.timeline?.realAtFrac(f) ?? 0}
+                      onZoomRange={(t0, t1) => vs.timeline?.focusRealRange(t0, t1)}
+                      onResetView={() => vs.timeline?.resetView()}
                       onDockLane={onDockLane}
                       dockedLane={() => dockLane()?.id ?? null}
                     />
@@ -2959,7 +2841,7 @@ export default function App() {
                           class="ghost sm"
                           onClick={() => {
                             setShowGaps(false);
-                            timeline?.setShowGaps(false);
+                            vs.timeline?.setShowGaps(false);
                           }}
                         >
                           x
@@ -2971,7 +2853,7 @@ export default function App() {
                             <button
                               class="legend-item"
                               title="zoom to gap"
-                              onClick={() => timeline?.focusRange(g.t0, g.t1)}
+                              onClick={() => vs.timeline?.focusRange(g.t0, g.t1)}
                             >
                               <span class="legend-name">{g.label}</span>
                               <span class="legend-count">{formatTime(g.dur)}</span>
@@ -3056,7 +2938,7 @@ export default function App() {
 
               <Show when={view() === "provenance"}>
                 <div class="body">
-                  <ProvenanceView mode={theme()} />
+                  <ProvenanceView mode={theme()} scope={runs.scope()} />
                 </div>
               </Show>
 

@@ -17,16 +17,14 @@ responsive on large traces.
   directly on the node tracks.
 - **Flamegraph** and density overview for spotting hot call paths and dead time
   at a glance.
-- **Analysis dashboards** built on Dask and Panel, embeddable next to the
-  timeline or on their own.
-- **Notebook widget**: the same timeline as an embeddable
-  [anywidget](https://anywidget.dev/) for Jupyter, fed over the widget comm.
+- **Analysis panels** built on Dask and Panel, embeddable next to the timeline
+  or on their own.
 
 ## Architecture
 
 ```
-browser SPA (SolidJS + canvas)  <-- HTTP -->  FastAPI (dfdashboard.server)
-notebook widget (anywidget)     <-- comm -->        |
+browser SPA (SolidJS + canvas)  <-- HTTP -->  FastAPI (dftracer.dashboard.app)
+                                                    |
                                                     v
                                    dftracer-utils bindings (C++ index)
                                    Dask (analysis pipelines)
@@ -65,19 +63,13 @@ Optional extras: `scale` (datashader), `builder` (panel-graphic-walker), `mcp`
 
 ## Building the frontend
 
-The Python package ships the notebook widget bundle, but the browser SPA is
-built separately and served via `--web-dist`:
+The wheel carries the built SPA. A source checkout builds it once and serves it
+with `--web-dist`:
 
 ```bash
 cd web
 npm ci
 npm run build            # -> web/dist (the SPA)
-```
-
-To rebuild the notebook widget bundle after changing `web/src/widget`:
-
-```bash
-npx vite build --config vite.widget.config.ts   # -> dfdashboard/widgets/static/timeline.js
 ```
 
 ## Running

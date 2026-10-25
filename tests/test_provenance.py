@@ -6,19 +6,15 @@ prov_type metadata and cat PROV / PROV_CONT events), so a change to either
 path shows up here.
 """
 
-import gzip
-import json
-import os
-
 import pytest
+from traces import write_trace  # noqa: E402
 
 pytest.importorskip("dftracer.utils")
 
+from dftracer.dashboard.config import Settings  # noqa: E402
+from dftracer.dashboard.data.trace import TraceData  # noqa: E402
+from dftracer.dashboard.server import create_app  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-
-from dfdashboard.config import Settings  # noqa: E402
-from dfdashboard.data.trace import TraceData  # noqa: E402
-from dfdashboard.server import create_app  # noqa: E402
 
 BASE = 1_000_000
 
@@ -191,10 +187,7 @@ def _write_trace(directory: str) -> str:
             "args": {"fhash": "f1", "ret": 128},
         },
     ]
-    path = os.path.join(directory, "prov.pfw.gz")
-    with gzip.open(path, "wt") as fh:
-        fh.write("[\n" + "\n".join(json.dumps(r) for r in rows) + "\n]\n")
-    return path
+    return write_trace(directory, rows, "prov.pfw.gz")
 
 
 @pytest.fixture

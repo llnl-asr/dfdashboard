@@ -1,5 +1,5 @@
 [project]
-name = "dfdashboard"
+name = "dftracer-dashboard"
 version = "0.0.1"
 description = "The Interactive Visualization Layer of the DataFlowX Suite"
 readme = "README.md"
@@ -50,7 +50,7 @@ dev = [
 ]
 
 [project.scripts]
-dfdashboard-serve = "dfdashboard.cli:main"
+dfdashboard-serve = "dftracer.dashboard.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -60,10 +60,17 @@ build-backend = "hatchling.build"
 # Needed on both targets: `python -m build` builds the wheel from the sdist, so
 # a wheel-only rule yields a wheel with no frontend.
 [tool.hatch.build.targets.sdist]
-artifacts = ["dfdashboard/web_dist/**"]
+include = ["python/dftracer", "web/dist", "README.md", "LICENSE"]
 
 [tool.hatch.build.targets.wheel]
-artifacts = ["dfdashboard/web_dist/**"]
+# dftracer/ carries no __init__.py: it is a PEP 420 namespace shared with
+# dftracer-utils and dftracer-analyzer, so this wheel contributes only its own
+# child. sources=python makes the wheel path dftracer/dashboard/...
+only-include = ["python/dftracer"]
+sources = ["python"]
+
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
