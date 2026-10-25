@@ -43,13 +43,20 @@ The HTTP routers included by the app: ``viz_router`` (timeline stream, density,
 counters, stats), ``tasks_router``, ``dashboard_router``, ``logs_router``, and
 ``runtime_router``.
 
-dftracer.dashboard.data
------------------------
+dftracer.dashboard.trace
+------------------------
 
-The trace data layer over the dftracer-utils bindings.
+The trace queries over the dftracer-utils bindings.
 
 - ``TraceData`` - opens and indexes the trace files and answers the viz queries
   (timeline stream, density, counters, proctree, breaks, stats).
+- ``trace_data()`` - one cached ``TraceData`` per file set.
+
+dftracer.dashboard.data
+-----------------------
+
+The files themselves: the watcher over a run tree, provenance extraction and the
+call-tree builder.
 
 dftracer.dashboard.compute
 --------------------------

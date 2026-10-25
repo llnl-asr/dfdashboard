@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends
 
 from ..runtime import InProcessTaskBackend
 from .deps import get_backend, get_cluster
+
+if TYPE_CHECKING:
+    from ..compute.cluster import ClusterManager
 
 router = APIRouter(prefix="/api", tags=["runtime"])
 
@@ -16,8 +19,8 @@ router = APIRouter(prefix="/api", tags=["runtime"])
 @router.get("/runtime")
 async def runtime(
     backend: InProcessTaskBackend = Depends(get_backend),
-    cluster: Any = Depends(get_cluster),
-) -> dict[str, Any]:
+    cluster: Optional[ClusterManager] = Depends(get_cluster),
+) -> dict[str, object]:
     counts = Counter(r.state.value for r in backend.records())
     cluster_status = cluster.status() if cluster is not None else {"running": False, "workers": 0}
     return {

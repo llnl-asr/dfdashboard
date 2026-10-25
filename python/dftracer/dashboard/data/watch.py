@@ -34,10 +34,15 @@ import time
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, cast
+from typing import TYPE_CHECKING, Callable, Optional, cast
 
+if TYPE_CHECKING:
+    from dftracer.utils import Runtime
+
+from ..trace import TraceData, trace_data
+from ..trace.frame import Row
 from . import fsnotify
-from .trace import TraceData, trace_data
+from .run_types import RunDict, Snapshot
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +55,7 @@ _MARKERS = ("_SUCCESS", ".done", "manifest.json", "split.json")
 _TAIL_WINDOW = 32 * 1024 * 1024
 
 
-def tail_record(path: str, window: int = _TAIL_WINDOW, tries: int = 16) -> Optional[dict]:
+def tail_record(path: str, window: int = _TAIL_WINDOW, tries: int = 16) -> Optional[Row]:
     """The last JSON record of a dftracer gzip file, without building an index.
 
     The writer cuts a member at the first line after ``write_buffer_size``
@@ -170,20 +175,20 @@ class Run:
     def bytes(self) -> int:
         return sum(f.size for f in self.files)
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "dir": self.dir,
-            "format": self.format,
-            "state": self.state,
-            "reason": self.reason,
-            "version": self.version,
-            "files": len(self.files),
-            "bytes": self.bytes,
-            "events": self.events,
-            "first_ts": self.first_ts,
-            "last_ts": self.last_ts,
-        }
+    def to_dict(self) -> RunDict:
+        return RunDict(
+            id=self.id,
+            dir=self.dir,
+            format=self.format,
+            state=self.state,
+            reason=self.reason,
+            version=self.version,
+            files=len(self.files),
+            bytes=self.bytes,
+            events=self.events,
+            first_ts=self.first_ts,
+            last_ts=self.last_ts,
+        )
 
 
 def _list_dir(directory: str) -> tuple[list[str], list[str]]:
@@ -308,7 +313,7 @@ class RunRegistry:
         self,
         root: str,
         index_dir: str,
-        runtime: Any = None,
+        runtime: Optional["Runtime"] = None,
         settle_s: float = 60.0,
         stale_s: float = 300.0,
         markers: Optional[list[str]] = None,
@@ -673,7 +678,7 @@ class RunRegistry:
                 self._traces[run_id] = self._file_runs(trace)
             return trace
 
-    def describe(self, run_id: str) -> dict[str, Any]:
+    def describe(self, run_id: str) -> RunDict:
         """A run plus its time range, which costs one metadata pass."""
         run = self._runs.get(run_id)
         if run is None:
@@ -691,14 +696,14 @@ class RunRegistry:
         out.update(events=run.events, first_ts=run.first_ts, last_ts=run.last_ts)
         return out
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self) -> Snapshot:
         ids = self.order()
-        return {
-            "root": self.root,
-            "watch": self.watch_mode,
-            "seq": self._seq,
-            "runs": [self.describe(r) for r in ids],
-        }
+        return Snapshot(
+            root=self.root,
+            watch=self.watch_mode,
+            seq=self._seq,
+            runs=[self.describe(r) for r in ids],
+        )
 
 
 class Watcher(threading.Thread):

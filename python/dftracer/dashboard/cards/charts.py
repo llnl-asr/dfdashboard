@@ -7,13 +7,11 @@ layout only.
 
 from __future__ import annotations
 
-from typing import Any
-
 from bokeh.models import DataRange1d
 from bokeh.plotting import figure
 
 
-def themed_figure(x_axis_type: str = "linear") -> Any:
+def themed_figure(x_axis_type: str = "linear") -> "figure":
     return figure(
         sizing_mode="stretch_both",
         toolbar_location=None,

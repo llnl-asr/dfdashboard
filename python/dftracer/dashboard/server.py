@@ -33,13 +33,12 @@ from .compute.cluster import ClusterManager
 from .compute.worker import set_worker_trace
 from .config import Settings
 from .core.errors import install_handlers
-from .data._calltree import warmup
-from .data.trace import trace_data
 from .data.watch import RunRegistry, Watcher
 from .runtime import EventBus, InProcessTaskBackend
 from .runtime.logs import get_hub
 from .runtime.pool import acquire as acquire_pools
 from .runtime.pool import release as release_pools
+from .trace import trace_data
 
 # Arrow is left uncompressed: the middleware buffers streaming responses to
 # compress them, which would defeat the progressive timeline stream. JSON
@@ -131,15 +130,8 @@ def create_app(settings: Settings) -> FastAPI:
         app.state.n_files = len(files)
         app.state.trace = trace
         set_worker_trace(trace)  # same-process Dask workers reuse this handle
-        asyncio.create_task(asyncio.to_thread(warmup))  # JIT the flamegraph off-path
 
         register_builtins()
-        # dfanalyzer can only be imported from the main thread, so warm it here
-        # rather than on the worker thread that later runs the pipeline.
-        from .analysis._dfa import warmup as warm_analyzer
-
-        if warm_analyzer():
-            log.info("dfanalyzer import warmed")
         load_plugins()
         events = EventBus()
         cluster = ClusterManager(settings.scheduler_address)

@@ -8,6 +8,8 @@ lifespan binds the server loop once, and callbacks schedule onto it.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
+from concurrent.futures import Future
 from typing import Any
 
 from fastapi import FastAPI
@@ -20,7 +22,7 @@ def bind(app: FastAPI) -> None:
     setattr(app.state, LOOP_ATTR, asyncio.get_running_loop())
 
 
-def spawn(app: FastAPI, coro: Any) -> Any:
+def spawn(app: FastAPI, coro: Coroutine[Any, Any, None]) -> Future[None] | asyncio.Future[None]:
     """Schedule ``coro`` on the server loop, from any thread.
 
     Returns a future whose ``cancel()`` stops the coroutine.

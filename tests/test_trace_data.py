@@ -6,7 +6,7 @@ from traces import event, meta, multirun, posix, write_trace  # noqa: E402
 
 pytest.importorskip("dftracer.utils")
 
-from dftracer.dashboard.data.trace import TraceData  # noqa: E402
+from dftracer.dashboard.trace import TraceData  # noqa: E402
 
 
 def _write_trace(directory: str) -> str:

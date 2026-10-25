@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional
+from typing import Optional
 
-from ..analysis.base import RunContext, get_pipeline
+from bokeh.document import Document
+from starlette.applications import Starlette
+
+from ..analysis.base import Result, RunContext, get_pipeline
 from ..analysis.pipelines import CardComputeParams
 from ..runtime.tasks import TERMINAL, Lane, TaskSpec, TaskState
 
 
-def qargs(doc: Any) -> dict[str, str]:
+def qargs(doc: Document) -> dict[str, str]:
     """The embed's query arguments, read back per session."""
     try:
-        args = doc.session_context.request.arguments or {}
+        ctx = doc.session_context
+        request = getattr(ctx, "request", None) if ctx is not None else None
+        args = request.arguments or {} if request is not None else {}
     except Exception:
         return {}
     out: dict[str, str] = {}
@@ -24,11 +29,11 @@ def qargs(doc: Any) -> dict[str, str]:
     return out
 
 
-def theme_of(doc: Any) -> str:
+def theme_of(doc: Document) -> str:
     return "light" if qargs(doc).get("theme") == "light" else "dark"
 
 
-def has_trace(app: Any) -> bool:
+def has_trace(app: Starlette) -> bool:
     """Whether any trace is loaded, asking the watcher when one is running.
 
     In watch mode the tree starts empty, so `app.state.trace` stays None while
@@ -40,7 +45,7 @@ def has_trace(app: Any) -> bool:
     return getattr(app.state, "trace", None) is not None
 
 
-async def run_task(app: Any, spec: TaskSpec) -> Any:
+async def run_task(app: Starlette, spec: TaskSpec) -> Optional[Result]:
     """Run a pipeline through the task backend and return its Result.
 
     Cancels the backend task if this coroutine is cancelled (session torn down
@@ -80,7 +85,9 @@ async def run_task(app: Any, spec: TaskSpec) -> Any:
         events.unlisten("task", q)
 
 
-async def compute(app: Any, doc: Any, op: str, n: int = 120, nbuckets: int = 48) -> Any:
+async def compute(
+    app: Starlette, doc: Document, op: str, n: int = 120, nbuckets: int = 48
+) -> Optional[Result]:
     """Run this card's window through the `card_compute` task and return its Result."""
     if not has_trace(app):
         return None

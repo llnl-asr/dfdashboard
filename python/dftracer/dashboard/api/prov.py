@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, Depends, Query
 
-from ..data.trace import TraceData
+from ..data.prov_types import ProvGraph
 from ..runtime.pool import pools
+from ..trace import TraceData
 from .cache import LRUCache
 from .deps import get_trace
 
@@ -21,11 +20,11 @@ async def prov_graph(
     all_files: int = Query(0, ge=0, le=1),
     mounts: str = "",
     trace: TraceData = Depends(get_trace),
-) -> Any:
+) -> ProvGraph:
     extra = tuple(m for m in (p.strip() for p in mounts.split(",")) if m)
     key = (trace.cache_key, "prov", io, all_files, extra)
 
-    async def build() -> dict[str, Any]:
+    async def build() -> ProvGraph:
         return await pools().run_compute(
             trace.provenance,
             include_io=bool(io),

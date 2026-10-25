@@ -10,10 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable, Optional, Sequence
+from typing import Callable, Optional, cast
 
 import panel as pn
+from bokeh.document import Document
+from bokeh.model import Model
 from bokeh.models import ColumnDataSource
+from bokeh.plotting import figure as Figure
+from starlette.applications import Starlette
 
 from ..core.theme import FONT, V_ACCENT, V_HAIR, V_INK, V_MUTED, V_PANEL, V_PLOT
 
@@ -155,7 +159,7 @@ class Card(pn.viewable.Viewer):
     id: str = ""
     title: str = ""
 
-    def __init__(self, app: Any, theme: str) -> None:
+    def __init__(self, app: Starlette, theme: str) -> None:
         self.app = app
         self.theme = theme
         self.view = self.build()
@@ -166,24 +170,24 @@ class Card(pn.viewable.Viewer):
     def __panel__(self) -> pn.viewable.Viewable:
         return self.view
 
-    def root(self, doc: Any) -> Any:
+    def root(self, doc: Document) -> Model:
         """The document root the SPA mounts into its grid cell."""
         return self.view.get_root(doc)
 
-    async def body(self, doc: Any) -> Any:
+    async def body(self, doc: Document) -> object:
         """Fetch what the card shows. None means no data yet: keep the placeholder."""
         raise NotImplementedError
 
-    def paint(self, payload: Any) -> None:
+    def paint(self, payload: object) -> None:
         raise NotImplementedError
 
     def paint_error(self, exc: Exception) -> None:
         raise exc
 
-    def after(self, doc: Any, fn: Callable[[], None]) -> None:
+    def after(self, doc: Document, fn: Callable[[], None]) -> None:
         doc.add_next_tick_callback(fn)
 
-    async def fill(self, doc: Any) -> None:
+    async def fill(self, doc: Document) -> None:
         try:
             payload = await self.body(doc)
         except asyncio.CancelledError:
@@ -207,8 +211,9 @@ class HtmlCard(Card):
             card_html(self.title, busy(self.busy)), sizing_mode="stretch_both", margin=0
         )
 
-    def paint(self, payload: str) -> None:
-        self.view.object = card_html(self.title, payload)  # ty: ignore[unresolved-attribute]
+    def paint(self, payload: object) -> None:
+        html = cast("pn.pane.HTML", self.view)
+        html.object = card_html(self.title, str(payload))
 
     def paint_error(self, exc: Exception) -> None:
         self.paint(err(exc))
@@ -227,24 +232,24 @@ class CanvasCard(Card):
         )
         return self.view
 
-    def empty(self) -> dict[str, Any]:
+    def empty(self) -> dict[str, object]:
         return {}
 
-    def chart(self, source: ColumnDataSource) -> Any:
+    def chart(self, source: ColumnDataSource) -> Figure:
         raise NotImplementedError
 
-    def paint(self, payload: dict[str, Sequence[Any]]) -> None:
-        self.source.data.update(payload)
+    def paint(self, payload: object) -> None:
+        self.source.data.update(cast("dict[str, list[object]]", payload))
         self.status.visible = False
 
 
-def version(app: Any) -> Optional[int]:
+def version(app: Starlette) -> Optional[int]:
     """The watched tree's change counter, or None when nothing can change."""
     registry = getattr(app.state, "registry", None)
     return registry.seq if registry is not None else None
 
 
-async def live(app: Any, card: Card, doc: Any) -> None:
+async def live(app: Starlette, card: Card, doc: Document) -> None:
     """Paint a card, then repaint it when the watched tree changes.
 
     One sequential loop per card, so a slow fill never stacks up behind itself

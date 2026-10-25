@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+from concurrent.futures import Future
 
 from bokeh.application import Application
 from bokeh.application.handlers.function import FunctionHandler
+from bokeh.document import Document
+from fastapi import FastAPI
 
 from ..analysis.docloop import spawn
 from ..core.theme import bokeh_theme
@@ -20,11 +23,11 @@ def card_ids() -> list[str]:
     return [cls.id for cls in CARDS]
 
 
-def build_cards_app(app: Any) -> Application:
-    def modify_doc(doc: Any) -> None:
+def build_cards_app(app: FastAPI) -> Application:
+    def modify_doc(doc: Document) -> None:
         theme = theme_of(doc)
         doc.theme = bokeh_theme(theme)
-        jobs: list[Any] = []
+        jobs: list[Future[None] | asyncio.Future[None]] = []
         for cls in CARDS:
             card = cls(app, theme)
             root = card.root(doc)
@@ -33,7 +36,7 @@ def build_cards_app(app: Any) -> Application:
                 doc.add_root(root)
             jobs.append(spawn(app, live(app, card, doc)))
 
-        def _cleanup(_ctx: Any) -> None:
+        def _cleanup(_ctx: object) -> None:
             for j in jobs:
                 j.cancel()
 

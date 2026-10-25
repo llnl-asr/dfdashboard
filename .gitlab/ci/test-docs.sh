@@ -29,7 +29,7 @@ $PODMAN run --rm --user 0:0 -v "$PWD:/ws" -w /ws "${PIP_ENV[@]}" -e SUITE="$SUIT
   apt-get -o APT::Sandbox::User=root install -y -qq --no-install-recommends libatomic1 libgomp1
   pip install --quiet --upgrade pip
   pip install --quiet $SUITE
-  DFDASHBOARD_SKIP_WEB=1 pip install --quiet -e . pytest pytest-asyncio httpx
+  pip install --quiet -e . pytest pytest-asyncio httpx
   python -c "import dftracer.dashboard, dftracer.dashboard.cli, dftracer.dashboard.config, dftracer.dashboard.server; print(\"dftracer.dashboard import smoke check OK\")"
   dfdashboard-serve --help
   pytest -v tests/

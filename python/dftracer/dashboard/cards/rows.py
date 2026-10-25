@@ -6,8 +6,11 @@ free of Panel and Bokeh lets the shapes be tested without a document.
 
 from __future__ import annotations
 
-from typing import Any
-
+from ..trace.questions.types import (
+    AccessPatternPayload,
+    OpStatsPayload,
+    ProcBytesPayload,
+)
 from .format import fmt_bytes, fmt_time
 
 OP_ORDER = ["read", "write", "open", "close", "stat", "seek", "sync"]
@@ -16,12 +19,12 @@ META_OPS = ["open", "close", "stat", "seek", "sync"]
 Row = tuple[str, float, str]
 
 
-def rows_op_time(st: dict) -> list[Row]:
+def rows_op_time(st: OpStatsPayload) -> list[Row]:
     rows = [(op, st[op]["time"], fmt_time(st[op]["time"])) for op in OP_ORDER if st[op]["time"] > 0]
     return sorted(rows, key=lambda r: -r[1])
 
 
-def rows_op_counts(st: dict) -> list[Row]:
+def rows_op_counts(st: OpStatsPayload) -> list[Row]:
     rows = [
         (op, float(st[op]["count"]), f"{int(st[op]['count']):,}")
         for op in OP_ORDER
@@ -30,7 +33,7 @@ def rows_op_counts(st: dict) -> list[Row]:
     return sorted(rows, key=lambda r: -r[1])
 
 
-def rows_busiest(procs: list[dict[str, Any]]) -> list[Row]:
+def rows_busiest(procs: ProcBytesPayload) -> list[Row]:
     top = sorted(procs, key=lambda p: -p["bytes"])[:12]
     return [
         (f"proc {p['pid']}", float(p["bytes"]), fmt_bytes(p["bytes"]))
@@ -39,11 +42,11 @@ def rows_busiest(procs: list[dict[str, Any]]) -> list[Row]:
     ]
 
 
-def rows_read_write(st: dict) -> list[Row]:
+def rows_read_write(st: OpStatsPayload) -> list[Row]:
     return [(op, float(st[op]["bytes"]), fmt_bytes(st[op]["bytes"])) for op in ("read", "write")]
 
 
-def rows_avg_xfer(st: dict) -> list[Row]:
+def rows_avg_xfer(st: OpStatsPayload) -> list[Row]:
     out = []
     for op in ("read", "write"):
         c, b = st[op]["count"], st[op]["bytes"]
@@ -52,13 +55,13 @@ def rows_avg_xfer(st: dict) -> list[Row]:
     return out
 
 
-def rows_data_meta(st: dict) -> list[Row]:
+def rows_data_meta(st: OpStatsPayload) -> list[Row]:
     data = st["read"]["time"] + st["write"]["time"]
     meta = sum(st[op]["time"] for op in META_OPS)
     return [("data", data, fmt_time(data)), ("metadata", meta, fmt_time(meta))]
 
 
-def rows_bw_by_host(procs: list[dict[str, Any]]) -> list[Row]:
+def rows_bw_by_host(procs: ProcBytesPayload) -> list[Row]:
     moved: dict[str, list[float]] = {}
     for p in procs:
         acc = moved.setdefault(str(p["host"]), [0.0, 0.0])
@@ -76,7 +79,7 @@ def rows_host_bytes(by_host: dict[str, float]) -> list[Row]:
     return [(h, float(v), fmt_bytes(v)) for h, v in pairs]
 
 
-def rows_access(ap: dict[str, Any]) -> tuple[list[Row], str]:
+def rows_access(ap: AccessPatternPayload) -> tuple[list[Row], str]:
     total = (ap["sequential"] + ap["random"]) or 1
     rows = [
         (label, float(v), f"{v:,} ({v / total * 100:.1f}%)")

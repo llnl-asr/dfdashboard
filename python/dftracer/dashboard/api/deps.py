@@ -6,9 +6,9 @@ from typing import Optional
 from fastapi import Request
 
 from ..core.errors import NO_SUCH_FILE, NO_SUCH_RUN, NO_TRACE_YET, ApiError
-from ..data.trace import TraceData
 from ..data.watch import RunRegistry
 from ..runtime import EventBus, InProcessTaskBackend
+from ..trace import TraceData
 
 
 def get_index_dir(request: Request) -> str:

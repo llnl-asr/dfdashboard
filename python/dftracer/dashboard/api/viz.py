@@ -7,17 +7,20 @@ loop stays responsive.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from dftracer.utils import DFTUtilsDuqlError, DFTUtilsParseError, DFTUtilsValueError
 from fastapi import APIRouter, Depends, Query, Response
 from fastapi.responses import StreamingResponse
 
 from ..core.errors import INVALID_QUERY, ApiError
-from ..data.trace import TraceData
+from ..data.run_types import UntimedPayload
+from ..trace import TraceData
+from ..trace.counters import NodeCountersPayload, SeriesPayload, SplitPayload
+from ..trace.questions.types import BreaksPayload, CalltreePayload, HistogramPayload, StatsPayload
 from .cache import LRUCache
 from .deps import get_n_files, get_trace
-from .schemas import Breaks, Info, Layers, ProcTree, Stats, TimeRange
+from .schemas import EventsPayload, EventWindow, Info, Layers, ProcTree, TimeRange
 
 ARROW_MIME = "application/vnd.apache.arrow.stream"
 
@@ -25,7 +28,7 @@ router = APIRouter(prefix="/api", tags=["viz"])
 _responses = LRUCache(maxsize=64)
 
 
-async def _run(fn: Callable[..., Any], *args: Any) -> Any:
+async def _run[T](fn: Callable[..., T], *args: object) -> T:
     try:
         return await asyncio.to_thread(fn, *args)
     except (DFTUtilsDuqlError, DFTUtilsValueError, DFTUtilsParseError, ValueError) as e:
@@ -81,9 +84,9 @@ async def events(
     summary: int = 1,
     query: Optional[str] = None,
     trace: TraceData = Depends(get_trace),
-) -> dict[str, Any]:
+) -> EventsPayload:
     ev = await _run(trace.events, begin, end, query)
-    return {"events": ev, "metadata": {"begin": begin, "end": end, "count": len(ev)}}
+    return EventsPayload(events=ev, metadata=EventWindow(begin=begin, end=end, count=len(ev)))
 
 
 @router.get("/viz/counters.arrow")
@@ -105,7 +108,7 @@ async def counter_series(
     width: int = Query(800, ge=1),
     query: Optional[str] = None,
     trace: TraceData = Depends(get_trace),
-) -> Any:
+) -> SeriesPayload:
     return await _run(trace.counter_series, begin, end, width, query)
 
 
@@ -115,7 +118,7 @@ async def node_counters(
     end: float,
     width: int = Query(700, ge=1),
     trace: TraceData = Depends(get_trace),
-) -> Any:
+) -> NodeCountersPayload:
     return await _run(trace.node_counters, begin, end, width)
 
 
@@ -129,18 +132,18 @@ async def counter_split(
     top: int = Query(32, ge=1, le=256),
     query: Optional[str] = None,
     trace: TraceData = Depends(get_trace),
-) -> Any:
+) -> SplitPayload:
     return await _run(trace.counter_split, begin, end, series, dim, width, top, query)
 
 
-@router.get("/viz/stats", response_model=Stats)
+@router.get("/viz/stats", response_model=StatsPayload)
 async def stats(
     begin: float,
     end: float,
     query: Optional[str] = None,
     group: str = "name",
     trace: TraceData = Depends(get_trace),
-) -> Any:
+) -> StatsPayload:
     return await _run(trace.stats, begin, end, query, group)
 
 
@@ -151,7 +154,7 @@ async def calltree(
     query: Optional[str] = None,
     group: Optional[str] = None,
     trace: TraceData = Depends(get_trace),
-) -> dict[str, Any]:
+) -> CalltreePayload:
     key = (trace.cache_key, "calltree", begin, end, query, group)
     return await _responses.get_or_set(
         key, lambda: _run(trace.calltree, begin, end, query, group == "pid")
@@ -159,12 +162,12 @@ async def calltree(
 
 
 @router.get("/viz/proctree", response_model=ProcTree)
-async def proctree(trace: TraceData = Depends(get_trace)) -> Any:
+async def proctree(trace: TraceData = Depends(get_trace)) -> dict[str, object]:
     return await asyncio.to_thread(trace.proctree)
 
 
-@router.get("/viz/breaks", response_model=Breaks)
-async def breaks(trace: TraceData = Depends(get_trace)) -> Any:
+@router.get("/viz/breaks", response_model=BreaksPayload)
+async def breaks(trace: TraceData = Depends(get_trace)) -> BreaksPayload:
     return await asyncio.to_thread(trace.breaks)
 
 
@@ -174,17 +177,17 @@ async def histogram(
     end: float,
     query: Optional[str] = None,
     trace: TraceData = Depends(get_trace),
-) -> dict[str, Any]:
+) -> HistogramPayload:
     return await _run(trace.histogram, begin, end, query)
 
 
 @router.get("/viz/layers", response_model=Layers)
-async def layers(trace: TraceData = Depends(get_trace)) -> Any:
+async def layers(trace: TraceData = Depends(get_trace)) -> dict[str, object]:
     return await asyncio.to_thread(trace.layers)
 
 
 @router.get("/viz/columns")
-async def columns(trace: TraceData = Depends(get_trace)) -> dict[str, Any]:
+async def columns(trace: TraceData = Depends(get_trace)) -> dict[str, object]:
     names = await asyncio.to_thread(trace.field_names)
     return {"columns": names, "ready": True}
 
@@ -195,7 +198,7 @@ async def untimed(
     offset: int = Query(0, ge=0),
     duql: Optional[str] = None,
     trace: TraceData = Depends(get_trace),
-) -> Any:
+) -> UntimedPayload:
     return await _run(trace.untimed, limit, offset, duql)
 
 

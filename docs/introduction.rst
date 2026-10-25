@@ -33,10 +33,9 @@ Installation
 ------------
 
 DFDashboard requires Python 3.12 or newer. ``dftracer-utils`` (the trace index
-bindings) and ``dftracer-analyzer`` are core dependencies and install
-automatically.
-They follow the develop-branch prereleases, so ``pyproject.toml`` asks for them
-with ``.dev0`` version floors.
+bindings) is a core dependency and installs automatically.
+It follows the develop-branch prereleases, so ``pyproject.toml`` asks for it with
+a ``.dev0`` version floor.
 A plain install resolves the newest prerelease without turning prereleases on
 for every other package.
 

@@ -7,17 +7,27 @@ spawns a LocalCluster (or connects to `scheduler_address`), and it is reused.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional
+from collections.abc import Awaitable
+from typing import TYPE_CHECKING, Optional, TypedDict, cast
+
+if TYPE_CHECKING:
+    from distributed import Client, LocalCluster
+
+
+class ClusterStatus(TypedDict):
+    running: bool
+    workers: int
+    address: Optional[str]
 
 
 class ClusterManager:
     def __init__(self, scheduler_address: Optional[str] = None) -> None:
         self._addr = scheduler_address
-        self._client: Any = None
-        self._cluster: Any = None
+        self._client: Optional[Client] = None
+        self._cluster: Optional[LocalCluster] = None
         self._lock = asyncio.Lock()
 
-    async def client(self) -> Any:
+    async def client(self) -> Client:
         if self._client is not None:
             return self._client
         async with self._lock:
@@ -36,20 +46,22 @@ class ClusterManager:
                 self._client = await Client(self._cluster, asynchronous=True)
             return self._client
 
-    def status(self) -> dict[str, Any]:
+    def status(self) -> ClusterStatus:
         if self._client is None:
-            return {"running": False, "workers": 0, "address": None}
+            return ClusterStatus(running=False, workers=0, address=None)
         info = self._client.scheduler_info()
-        return {
-            "running": True,
-            "workers": len(info.get("workers", {})),
-            "address": self._client.scheduler.address if self._addr else "local",
-        }
+        return ClusterStatus(
+            running=True,
+            workers=len(info.get("workers", {})),
+            # the configured address is what the user asked for; without one
+            # the client talks to the local cluster we started.
+            address=self._addr or "local",
+        )
 
     async def close(self) -> None:
         if self._client is not None:
             await self._client.close()
             self._client = None
         if self._cluster is not None:
-            await self._cluster.close()
+            await cast("Awaitable[None]", self._cluster.close())
             self._cluster = None

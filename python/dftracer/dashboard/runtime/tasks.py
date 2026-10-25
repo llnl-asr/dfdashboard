@@ -12,9 +12,14 @@ import json
 import time
 import uuid
 from collections import OrderedDict
+from collections.abc import Awaitable
 from dataclasses import asdict, dataclass, field
 from enum import Enum, IntEnum
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional, TypedDict, cast
+
+if TYPE_CHECKING:
+    from ..analysis.base import Result as TaskResult
+    from ..trace import TraceData
 
 from pydantic import BaseModel, Field
 
@@ -45,7 +50,7 @@ DEFAULT_LANE_LIMITS = {Lane.INTERACTIVE: 8, Lane.NORMAL: 4, Lane.BATCH: 2}
 
 class TaskSpec(BaseModel):
     pipeline_id: str
-    params: dict[str, Any] = Field(default_factory=dict)
+    params: dict[str, object] = Field(default_factory=dict)
     lane: Lane = Lane.NORMAL
     dedup_key: Optional[str] = None
     submitted_by: Optional[str] = None
@@ -58,6 +63,31 @@ class TaskSpec(BaseModel):
         return hashlib.sha1(payload.encode()).hexdigest()
 
 
+class TaskDict(TypedDict):
+    """One task as the API serves it: the record without its cancel handle."""
+
+    task_id: str
+    spec: dict[str, object]
+    state: str
+    progress: float
+    message: str
+    error: Optional[str]
+    t_submitted: float
+    t_started: Optional[float]
+    t_done: Optional[float]
+
+
+class TaskResultBody(TypedDict):
+    data: object
+    meta: dict[str, object]
+
+
+class TaskDetail(TaskDict):
+    """The record plus its result, when one is ready."""
+
+    result: TaskResultBody
+
+
 @dataclass
 class TaskRecord:
     task_id: str
@@ -65,20 +95,20 @@ class TaskRecord:
     state: TaskState = TaskState.QUEUED
     progress: float = 0.0
     message: str = ""
-    result: Any = None
+    result: Optional[TaskResult] = None
     error: Optional[str] = None
     t_submitted: float = field(default_factory=time.time)
     t_started: Optional[float] = None
     t_done: Optional[float] = None
     _cancel: Optional[asyncio.Event] = None
 
-    def to_dict(self) -> dict[str, Any]:
-        d = asdict(self)
+    def to_dict(self) -> TaskDict:
+        d: dict[str, object] = asdict(self)
         d.pop("_cancel", None)
         d.pop("result", None)
         d["spec"] = self.spec.model_dump()
         d["state"] = self.state.value
-        return d
+        return cast("TaskDict", d)
 
 
 class InProcessTaskBackend:
@@ -87,9 +117,9 @@ class InProcessTaskBackend:
         resolve_pipeline: Callable[[str], Optional[Pipeline]],
         events: EventBus,
         lane_limits: Optional[dict[Lane, int]] = None,
-        data: Any = None,
-        data_provider: Optional[Callable[[], Any]] = None,
-        client_provider: Any = None,
+        data: Optional[TraceData] = None,
+        data_provider: Optional[Callable[[], Optional[TraceData]]] = None,
+        client_provider: Optional[Callable[[], Awaitable[object]]] = None,
         result_cache_size: int = 64,
         max_records: int = 512,
     ) -> None:
@@ -102,7 +132,7 @@ class InProcessTaskBackend:
         self._active_by_key: dict[str, str] = {}
         # LRU of completed results for cache=True specs only, so this never holds
         # the large per-window results (bounded by count -> no unbounded growth).
-        self._result_cache: OrderedDict[str, Any] = OrderedDict()
+        self._result_cache: OrderedDict[str, Result] = OrderedDict()
         self._result_cache_size = result_cache_size
         self._max_records = max_records
         limits = lane_limits or DEFAULT_LANE_LIMITS

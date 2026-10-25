@@ -42,7 +42,7 @@ sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
 
 $PODMAN run --rm --user 0:0 -v "$PWD:/ws" -w /ws docker.io/library/python:3.12 bash -ec '
   pip install --quiet --upgrade pip build
-  DFDASHBOARD_SKIP_WEB=1 python3 -m build --outdir wheelhouse .
+  python3 -m build --outdir wheelhouse .
 '
 git checkout -- pyproject.toml
 

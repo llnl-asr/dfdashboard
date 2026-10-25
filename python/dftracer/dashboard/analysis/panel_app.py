@@ -8,20 +8,27 @@ session into a plain <div>. embed_script() returns that script.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Optional, cast
 from urllib.parse import urlparse
 
 import panel as pn
 from bokeh.core.templates import AUTOLOAD_JS
+from bokeh.document import Document
 from bokeh.embed.bundle import Script, bundle_for_objs_and_resources
 from bokeh.embed.elements import script_for_render_items
 from bokeh.embed.server import server_document
 from bokeh.embed.util import RenderItem
 from bokeh.models import ColumnDataSource, DataRange1d
 from bokeh.plotting import figure
+from bokeh.server.session import ServerSession
+
+if TYPE_CHECKING:
+    from bokeh.models.sources import DataDict
 from bokeh.util.token import generate_jwt_token, generate_session_id
 from bokeh_fastapi import BokehFastAPI
+from dftracer.utils import DataFrame
 from fastapi import FastAPI, Request, Response
 from panel.io.application import build_applications
 from tornado.httputil import HTTPHeaders, HTTPServerRequest
@@ -29,6 +36,7 @@ from tornado.ioloop import IOLoop
 
 from ..cards import CARDS_PATH, build_cards_app
 from ..core.theme import DARK, FONT
+from ..runtime.events import EventBus
 from .docloop import spawn
 
 pn.extension("tabulator", inline=True)
@@ -48,7 +56,7 @@ PANEL_DIST_MOUNT = f"/panel-dist/{pn.__version__}/dist/"
 def _localize_panel_cdn() -> None:
     base = _pnres.CDN_DIST
 
-    def repl(val: Any) -> Any:
+    def repl(val: object) -> object:
         if isinstance(val, str):
             return val.replace(base, PANEL_DIST_MOUNT) if base in val else val
         if isinstance(val, list):
@@ -75,7 +83,7 @@ def _localize_panel_cdn() -> None:
     # would build a shared ImportedStyleSheet and break the per-session cards.
     _orig_resolve = _pnres.resolve_stylesheet
 
-    def _resolve_stylesheet(cls: Any, stylesheet: str, attribute: str | None = None) -> Any:
+    def _resolve_stylesheet(cls: object, stylesheet: str, attribute: str | None = None) -> object:
         s = os.fspath(stylesheet)
         if isinstance(s, str) and s.startswith(PANEL_DIST_MOUNT):
             return s
@@ -165,7 +173,7 @@ _CARD_CSS = f"""
 """
 
 
-def _rescale_units(df: Any, cols: list[str], per_sec: bool) -> dict[str, str]:
+def _rescale_units(df: DataFrame, cols: list[str], per_sec: bool) -> dict[str, str]:
     """Scale each byte(-rate) column to one unit from its max; return the unit
     titles. Column names stay raw so the query box keeps working on them."""
     prefixes = ["", "K", "M", "G", "T", "P"]
@@ -174,7 +182,7 @@ def _rescale_units(df: Any, cols: list[str], per_sec: bool) -> dict[str, str]:
         col = df[c]
         if not col.notna().any():
             continue
-        m = float(col.abs().max())
+        m = float(cast("float", col.abs().max()))
         k = 0
         while m >= 1000.0 and k < len(prefixes) - 1:
             m /= 1000.0
@@ -219,7 +227,7 @@ _DFA_DEFAULT_METRICS = [
 ]
 
 
-def _msg(text: str) -> Any:
+def _msg(text: str) -> pn.pane.HTML:
     return pn.pane.HTML(
         f'<div style="margin:40px auto;text-align:center;color:{MUTED};font:14px {FONT}">'
         f"{text}</div>",
@@ -227,7 +235,7 @@ def _msg(text: str) -> Any:
     )
 
 
-def _tile(label: str, value: str) -> Any:
+def _tile(label: str, value: str) -> pn.pane.HTML:
     return pn.pane.HTML(
         f'<div style="border:1px solid {DIVIDER};background:{PANEL_BG};border-radius:4px;'
         f'padding:8px 14px;margin:0 8px 8px 0">'
@@ -238,7 +246,16 @@ def _tile(label: str, value: str) -> Any:
     )
 
 
-def _bandwidth_view(app: FastAPI, task_id: str, events: Any, doc: Any) -> Any:
+def _stream_row(payload: object) -> "DataDict":
+    """One partial from the pipeline as the three columns the plot streams."""
+    row: Mapping[str, object] = payload if isinstance(payload, Mapping) else {}
+    out: DataDict = {"x": [row.get("x")], "read": [row.get("read")], "write": [row.get("write")]}
+    return out
+
+
+def _bandwidth_view(
+    app: FastAPI, task_id: str, events: Optional[EventBus], doc: Optional[Document]
+) -> pn.pane.Bokeh:
     src = ColumnDataSource({"x": [], "read": [], "write": []})
     p = figure(
         height=380,
@@ -263,107 +280,25 @@ def _bandwidth_view(app: FastAPI, task_id: str, events: Any, doc: Any) -> Any:
         async def pump():
             async for _topic, payload in events.subscribe(f"task.{task_id}.partial"):
                 doc.add_next_tick_callback(
-                    lambda p=payload: src.stream(
-                        {"x": [p["x"]], "read": [p["read"]], "write": [p["write"]]}, rollover=5000
-                    )
+                    lambda p=payload: src.stream(_stream_row(p), rollover=5000)
                 )
 
         job = spawn(app, pump())
-        pn.state.on_session_destroyed(lambda _c: job.cancel())
+        pn.state.on_session_destroyed(_cancel_job(job))
 
     return pn.pane.Bokeh(p, sizing_mode="stretch_width")
 
 
-def _render_dfanalyzer(data: dict) -> Any:
-    import pandas as pd
+def _cancel_job(job: object) -> Callable[[object], None]:
+    """Bokeh runs this at session end; it must return None, not the cancel's bool."""
 
-    s = data.get("raw_stats") or {}
+    def cancel(_ctx: object) -> None:
+        job.cancel()  # ty: ignore[unresolved-attribute]
 
-    def num(v: Any, unit: str = "") -> str:
-        if v is None:
-            return "-"
-        return f"{float(v):.1f}{unit}" if unit else f"{int(v):,}"
-
-    tiles = pn.FlexBox(
-        _tile("Job time", num(s.get("job_time"), "s")),
-        _tile("Events", num(s.get("total_event_count"))),
-        _tile("Files", num(s.get("unique_file_count"))),
-        _tile("Hosts", num(s.get("unique_host_count"))),
-        _tile("Processes", num(s.get("unique_process_count"))),
-        sizing_mode="stretch_width",
-    )
-    parts: list[Any] = [tiles]
-
-    path = data.get("main_view_path")
-    if path and os.path.exists(path):
-        df = pd.read_parquet(path)
-        cols = [str(c) for c in df.columns]
-        titles = _rescale_units(df, [c for c in cols if "bw" in c.lower()], per_sec=True)
-        titles.update(_rescale_units(df, [c for c in cols if "size" in c.lower()], per_sec=False))
-        ids = [c for c in cols[:2]]
-        default = list(dict.fromkeys(ids + [m for m in _DFA_DEFAULT_METRICS if m in cols]))
-        default = default or cols[:12]
-        table = pn.widgets.Tabulator(
-            df,
-            disabled=True,
-            pagination="local",
-            page_size=15,
-            theme="simple",
-            show_index=False,
-            layout="fit_data_table",
-            frozen_columns=ids,
-            titles=titles,
-            sizing_mode="stretch_width",
-            height=560,
-            hidden_columns=[c for c in cols if c not in default],
-            stylesheets=[_TABLE_CSS],
-        )
-
-        query = pn.widgets.TextInput(
-            name="",
-            placeholder="filter rows, e.g.  bw > 1e9 and proc_name.str.contains('train')",
-            sizing_mode="stretch_width",
-            stylesheets=[_QUERY_CSS],
-        )
-        err = pn.pane.HTML("", sizing_mode="stretch_width", styles={"color": WRITE})
-
-        def apply_query(e: Any) -> None:
-            expr = (e.new or "").strip()
-            if not expr:
-                table.value, err.object = df, ""
-                return
-            try:
-                table.value = df.query(expr, engine="python")
-                err.object = ""
-            except Exception as ex:
-                err.object = f"query error: {ex}"
-
-        query.param.watch(apply_query, "value")
-
-        picker = pn.widgets.MultiChoice(
-            name="",
-            options=cols,
-            value=default,
-            sizing_mode="stretch_width",
-            stylesheets=[_PICKER_CSS],
-        )
-        picker.param.watch(
-            lambda e: setattr(table, "hidden_columns", [c for c in cols if c not in e.new]), "value"
-        )
-        cols_card = pn.Card(
-            picker,
-            title="Columns",
-            collapsed=True,
-            sizing_mode="stretch_width",
-            stylesheets=[_CARD_CSS],
-        )
-        parts += [query, err, cols_card, table]
-    return pn.Column(*parts, sizing_mode="stretch_width")
+    return cancel
 
 
-def _render_result(pipeline: str, data: Any) -> Any:
-    if pipeline == "dfanalyzer":
-        return _render_dfanalyzer(data if isinstance(data, dict) else {})
+def _render_result(pipeline: str, data: object) -> pn.pane.JSON:
     return pn.pane.JSON(data, theme="dark", depth=3, sizing_mode="stretch_width")
 
 
@@ -376,7 +311,8 @@ def _make_app(app: FastAPI):
         rec = backend.get(task_id) if (backend and task_id) else None
 
         if rec is not None and rec.spec.pipeline_id == "bandwidth_scan":
-            return _bandwidth_view(app, task_id, events, doc)
+            bus: Optional[EventBus] = events if isinstance(events, EventBus) else None
+            return _bandwidth_view(app, task_id, bus, doc)
 
         container = pn.Column(sizing_mode="stretch_width")
         if rec is None or backend is None:
@@ -403,13 +339,13 @@ def _make_app(app: FastAPI):
                             break
 
                 job = spawn(app, watch())
-                pn.state.on_session_destroyed(lambda _c: job.cancel())
+                pn.state.on_session_destroyed(_cancel_job(job))
         return container
 
     return make_app
 
 
-async def _new_session(server: BokehFastAPI, app_path: str, request: Request) -> Any:
+async def _new_session(server: BokehFastAPI, app_path: str, request: Request) -> ServerSession:
     ctx = server._applications[app_path]
     session_id = generate_session_id(secret_key=server.secret_key, signed=server.sign_sessions)
     treq = HTTPServerRequest(
@@ -418,7 +354,11 @@ async def _new_session(server: BokehFastAPI, app_path: str, request: Request) ->
     args: dict[str, list[bytes]] = {
         k: [v.encode()] for k, v in request.query_params.items() if not k.startswith("bokeh-")
     }
-    payload: dict[str, Any] = {"headers": dict(request.headers), "cookies": {}, "arguments": args}
+    payload: dict[str, object] = {
+        "headers": dict(request.headers),
+        "cookies": {},
+        "arguments": args,
+    }
     payload.update(ctx.application.process_request(treq))
     token = generate_jwt_token(
         session_id,
@@ -466,7 +406,15 @@ def mount_panel(app: FastAPI) -> None:
         element_id = request.query_params["bokeh-autoload-element"]
         app_path = request.query_params.get("bokeh-app-path", _APP_PATH)
         session = await _new_session(server, _APP_PATH, request)
-        items = [RenderItem(token=session.token, elementid=element_id, use_for_title=False)]  # ty: ignore[invalid-argument-type]
+        # Bokeh types elementid as an ID, but the autoload endpoint hands it a
+        # plain string from the query, which is what Bokeh's own handler does.
+        items = [
+            RenderItem(
+                token=session.token,
+                elementid=element_id,  # ty: ignore[invalid-argument-type]
+                use_for_title=False,
+            )
+        ]
         return _autoload_js(server, request, app_path, items)
 
     # Cards share one session; each requested card's root renders into its own
@@ -481,9 +429,17 @@ def mount_panel(app: FastAPI) -> None:
         session = await _new_session(server, CARDS_PATH, request)
         roots = {r: f"pcard-{r.name}" for r in session.document.roots if r.name in want}
         items = [
-            RenderItem(token=session.token, roots=roots, use_for_title=False)  # ty: ignore[invalid-argument-type]
+            RenderItem(
+                token=session.token,
+                roots=roots,  # ty: ignore[invalid-argument-type]
+                use_for_title=False,
+            )
             if roots
-            else RenderItem(token=session.token, elementid=element_id, use_for_title=False)  # ty: ignore[invalid-argument-type]
+            else RenderItem(
+                token=session.token,
+                elementid=element_id,  # ty: ignore[invalid-argument-type]
+                use_for_title=False,
+            )
         ]
         return _autoload_js(server, request, app_path, items)
 

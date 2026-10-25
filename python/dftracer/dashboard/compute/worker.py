@@ -7,18 +7,30 @@ index directory (cached per worker).
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
-_TRACE: Any = None
-_REBUILT: dict[str, Any] = {}
+from ..trace.counters import SeriesPayload
+from ..trace.questions.types import (
+    AccessPatternPayload,
+    HistogramPayload,
+    OpStatsPayload,
+    ProcBytesPayload,
+    SizeHistogramPayload,
+)
+
+if TYPE_CHECKING:
+    from ..trace import TraceData
+
+_TRACE: Optional[TraceData] = None
+_REBUILT: dict[str, TraceData] = {}
 
 
-def set_worker_trace(trace: Any) -> None:
+def set_worker_trace(trace: Optional[TraceData]) -> None:
     global _TRACE
     _TRACE = trace
 
 
-def _trace_for(index_dir: str, files: Optional[list[str]]) -> Any:
+def _trace_for(index_dir: str, files: Optional[list[str]]) -> TraceData:
     if _TRACE is not None and (not files or list(_TRACE.paths) == files):
         return _TRACE
     if not index_dir or not files:
@@ -26,16 +38,33 @@ def _trace_for(index_dir: str, files: Optional[list[str]]) -> Any:
     key = index_dir + "|" + ",".join(files)
     trace = _REBUILT.get(key)
     if trace is None:
-        from ..data.trace import trace_data
+        from ..trace import trace_data
 
         trace = trace_data(files, index_dir=index_dir)
         _REBUILT[key] = trace
     return trace
 
 
+CardAnswer = Union[
+    OpStatsPayload,
+    HistogramPayload,
+    SizeHistogramPayload,
+    AccessPatternPayload,
+    ProcBytesPayload,
+    SeriesPayload,
+    bytes,
+]
+
+
 def dispatch_op(
-    trace: Any, op: str, begin: float, end: float, query: Optional[str], n: int, nbuckets: int
-) -> Any:
+    trace: TraceData,
+    op: str,
+    begin: float,
+    end: float,
+    query: Optional[str],
+    n: int,
+    nbuckets: int,
+) -> CardAnswer:
     if op == "op_stats":
         return trace.op_stats(begin, end, query)
     if op == "counters":
@@ -60,5 +89,5 @@ def worker_compute(
     nbuckets: int,
     index_dir: str = "",
     files: Optional[list[str]] = None,
-) -> Any:
+) -> CardAnswer:
     return dispatch_op(_trace_for(index_dir, files), op, begin, end, query, n, nbuckets)

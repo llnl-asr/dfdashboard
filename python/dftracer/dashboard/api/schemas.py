@@ -1,10 +1,16 @@
-"""Response models for the viz API."""
+"""Response models for the viz API.
+
+The stats and breaks payloads are the question TypedDicts themselves, so there is
+one definition and FastAPI validates against it.
+"""
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional, TypedDict
 
 from pydantic import BaseModel
+
+from ..data.run_types import EventRow
 
 
 class TimeRange(BaseModel):
@@ -39,34 +45,18 @@ class ProcTree(BaseModel):
     nodes: list[ProcNode]
 
 
-class NameStat(BaseModel):
-    name: str
-    count: int
-    total: int
-    avg: float
-    min: int
-    max: int
-
-
-class Stats(BaseModel):
-    count: int
-    total_dur: int
-    wall: int
-    truncated: bool = False
-    names: list[NameStat]
-
-
-class Breaks(BaseModel):
-    gaps: list[dict[str, Any]]
-    multi_run: bool
-    # Trustworthy timing window from the process start/end records, in trace-
-    # relative us; an event outside it is malformed. Zero means unknown.
-    valid_start: int = 0
-    valid_end: int = 0
-    max_life: int = 0
-
-
 class Layers(BaseModel):
     layers: dict[str, str]
     total_files: int
     io_files: int
+
+
+class EventWindow(BaseModel):
+    begin: float
+    end: float
+    count: int
+
+
+class EventsPayload(TypedDict):
+    events: list[EventRow]
+    metadata: EventWindow

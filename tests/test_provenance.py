@@ -12,8 +12,8 @@ from traces import write_trace  # noqa: E402
 pytest.importorskip("dftracer.utils")
 
 from dftracer.dashboard.config import Settings  # noqa: E402
-from dftracer.dashboard.data.trace import TraceData  # noqa: E402
 from dftracer.dashboard.server import create_app  # noqa: E402
+from dftracer.dashboard.trace import TraceData  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 BASE = 1_000_000

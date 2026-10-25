@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Mapping
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from ..analysis.base import list_pipelines
 from ..core.errors import UNKNOWN_TASK, ApiError
 from ..runtime import EventBus, InProcessTaskBackend, TaskSpec, TaskState
+from ..runtime.tasks import TaskDetail, TaskDict, TaskResultBody
 from .deps import get_backend, get_events
 
 router = APIRouter(prefix="/api", tags=["analysis"])
@@ -19,7 +20,7 @@ _TERMINAL = {s.value for s in (TaskState.DONE, TaskState.FAILED, TaskState.CANCE
 
 
 @router.get("/pipelines")
-async def pipelines() -> list[dict[str, Any]]:
+async def pipelines() -> list[dict[str, object]]:
     return [p.describe() for p in list_pipelines() if not p.internal]
 
 
@@ -29,21 +30,21 @@ async def submit(spec: TaskSpec, backend: InProcessTaskBackend = Depends(get_bac
 
 
 @router.get("/tasks")
-async def tasks(backend: InProcessTaskBackend = Depends(get_backend)) -> list[dict[str, Any]]:
+async def tasks(
+    backend: InProcessTaskBackend = Depends(get_backend),
+) -> list[TaskDict]:
     return [r.to_dict() for r in backend.records()]
 
 
 @router.get("/tasks/{task_id}")
-async def task(
-    task_id: str, backend: InProcessTaskBackend = Depends(get_backend)
-) -> dict[str, Any]:
+async def task(task_id: str, backend: InProcessTaskBackend = Depends(get_backend)) -> TaskDetail:
     rec = backend.get(task_id)
     if rec is None:
         raise ApiError(404, UNKNOWN_TASK, "unknown task")
     d = rec.to_dict()
-    if rec.result is not None:
-        d["result"] = {"data": rec.result.data, "meta": rec.result.meta}
-    return d
+    if rec.result is None:
+        raise ApiError(404, UNKNOWN_TASK, "no result yet")
+    return {**d, "result": TaskResultBody(data=rec.result.data, meta=rec.result.meta)}
 
 
 @router.delete("/tasks/{task_id}")
@@ -69,10 +70,11 @@ async def events(
         async for _topic, payload in bus.subscribe("task"):
             if await request.is_disconnected():
                 break
-            if payload.get("task_id") != task_id:
+            event: Mapping[str, object] = payload if isinstance(payload, Mapping) else {}
+            if event.get("task_id") != task_id:
                 continue
-            yield f"data: {json.dumps(payload)}\n\n"
-            if payload.get("state") in _TERMINAL:
+            yield f"data: {json.dumps(event)}\n\n"
+            if event.get("state") in _TERMINAL:
                 break
 
     return StreamingResponse(stream(), media_type="text/event-stream")

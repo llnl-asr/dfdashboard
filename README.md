@@ -23,7 +23,7 @@ responsive on large traces.
 ## Architecture
 
 ```
-browser SPA (SolidJS + canvas)  <-- HTTP -->  FastAPI (dftracer.dashboard.app)
+browser SPA (SolidJS + canvas)  <-- HTTP -->  FastAPI (dftracer.dashboard.server)
                                                     |
                                                     v
                                    dftracer-utils bindings (C++ index)
@@ -45,10 +45,10 @@ source .venv/bin/activate
 uv pip install -e .
 ```
 
-`dftracer-utils` (the trace index bindings) and `dftracer-analyzer` are core
-dependencies and install automatically.
-They follow the develop-branch prereleases, so `pyproject.toml` asks for them
-with `.dev0` version floors.
+`dftracer-utils` (the trace index bindings) is a core dependency and installs
+automatically.
+It follows the develop-branch prereleases, so `pyproject.toml` asks for it with a
+`.dev0` version floor.
 A plain install resolves the newest prerelease without turning prereleases on
 for every other package.
 To develop against a local checkout of the bindings, install them editable on

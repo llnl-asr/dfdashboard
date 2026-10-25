@@ -25,12 +25,26 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Iterator, Optional, cast
+from typing import TYPE_CHECKING, Iterator, Optional, cast
+
+from ..trace.frame import Row
+from .prov_types import (
+    Access,
+    Activity,
+    ActivityAcc,
+    Cell,
+    EntityFile,
+    Mount,
+    ProvAcc,
+    ProvFile,
+    ProvGraph,
+    ProvStats,
+)
 
 if TYPE_CHECKING:
     from dftracer.utils import DataFrame
 
-    from .trace import TraceData
+    from ..trace import TraceData
 
 _ENTITY_PREFIX = "prov_entity:"
 _TYPE_PREFIX = "prov_type:"
@@ -104,7 +118,7 @@ _PSEUDO_FSTYPES = frozenset(
 _RELATION_KEY = re.compile(rf"^(relations\.)?({'|'.join(_RELATIONS)})\.(\d+)$")
 
 
-def _named(names: tuple[str, ...], value: Any, default: str) -> str:
+def _named(names: tuple[str, ...], value: Cell, default: str) -> str:
     """A numeric enum as its name; an already-named value passes through."""
     text = str(value) if value is not None else ""
     if not text:
@@ -115,7 +129,7 @@ def _named(names: tuple[str, ...], value: Any, default: str) -> str:
     return names[index] if 0 <= index < len(names) else names[-1]
 
 
-def _relation_name(value: Any) -> str:
+def _relation_name(value: Cell) -> str:
     text = str(value) if value is not None else ""
     try:
         return _RELATION_NAMES.get(int(text), "related")
@@ -123,7 +137,7 @@ def _relation_name(value: Any) -> str:
         return text or "related"
 
 
-def _split_hashes(text: Any) -> list[str]:
+def _split_hashes(text: Cell) -> list[str]:
     if not text:
         return []
     return [part for part in str(text).split(",") if part]
@@ -155,19 +169,19 @@ def _excluded(path: str) -> bool:
     return path == "/dev/null"
 
 
-def _host_mounts(extra: tuple[str, ...]) -> list[dict[str, str]]:
-    table: list[dict[str, str]] = []
+def _host_mounts(extra: tuple[str, ...]) -> list[Mount]:
+    table: list[Mount] = []
     for mount in extra:
         path = mount.rstrip("/") or "/"
         if mount:
-            table.append({"path": path, "fstype": "user"})
+            table.append(Mount(path=path, fstype="user"))
     try:
         with open("/proc/self/mounts") as f:
             for line in f:
                 parts = line.split()
                 if len(parts) < 3 or parts[1] == "/" or parts[2] in _PSEUDO_FSTYPES:
                     continue
-                table.append({"path": _unescape_mount(parts[1]), "fstype": parts[2]})
+                table.append(Mount(path=_unescape_mount(parts[1]), fstype=parts[2]))
     except OSError:
         pass
     return table
@@ -180,7 +194,7 @@ def _unescape_mount(path: str) -> str:
     return re.sub(r"\\([0-7]{3})", repl, path)
 
 
-def _split_mount(path: str, table: list[dict[str, str]]) -> tuple[str, str]:
+def _split_mount(path: str, table: list[Mount]) -> tuple[str, str]:
     best = ""
     for mount in table:
         m = mount["path"]
@@ -245,7 +259,7 @@ def _relation_columns(trace: "TraceData") -> list[tuple[str, str, int]]:
     return out
 
 
-def _list_of(row: dict[str, Any], prefix: str, rel: str) -> list[str]:
+def _list_of(row: Row, prefix: str, rel: str) -> list[str]:
     cells: list[tuple[int, str]] = []
     for k, v in row.items():
         if v is None:
@@ -273,7 +287,7 @@ def _add_pid(pids: list[int], pid: int) -> None:
         pids.append(pid)
 
 
-def _field(row: dict[str, Any], key: str, idx: int) -> str:
+def _field(row: Row, key: str, idx: int) -> str:
     """A structured field, else the ``|``-separated legacy value at ``idx``."""
     value = row.get(f"args.{key}")
     if value is not None:
@@ -284,7 +298,7 @@ def _field(row: dict[str, Any], key: str, idx: int) -> str:
     return parts[idx] if idx < len(parts) else ""
 
 
-def _ingest(acc: dict[str, Any], row: dict[str, Any]) -> None:
+def _ingest(acc: ProvAcc, row: Row) -> None:
     stats = acc["stats"]
     pid = int(row.get("pid") or 0)
     cat = str(row.get("cat") or "")
@@ -377,7 +391,7 @@ def _ingest(acc: dict[str, Any], row: dict[str, Any]) -> None:
     activity["ngen"] = _int(row.get("args.prov_ngen"), -1)
 
 
-def _ingest_legacy_meta(acc: dict[str, Any], row: dict[str, Any]) -> None:
+def _ingest_legacy_meta(acc: ProvAcc, row: Row) -> None:
     """prov_entity/prov_type metadata; EH/ET/ER rows are handled by the scan."""
     args_name = str(row.get("args.name") or "")
     pid = int(row.get("pid") or 0)
@@ -410,7 +424,7 @@ def _ingest_legacy_meta(acc: dict[str, Any], row: dict[str, Any]) -> None:
     _add_pid(cast("list[int]", entity["pids"]), pid)
 
 
-def _new_activity(aid: str) -> dict[str, Any]:
+def _new_activity(aid: str) -> ActivityAcc:
     return {
         "aid": aid,
         "name": "",
@@ -429,14 +443,14 @@ def _new_activity(aid: str) -> dict[str, Any]:
     }
 
 
-def _int(value: Any, default: int) -> int:
+def _int(value: Cell, default: int) -> int:
     try:
-        return int(value)
+        return int(cast("str | int", value))
     except (TypeError, ValueError):
         return default
 
 
-def _finish(acc: dict[str, Any]) -> dict[str, Any]:
+def _finish(acc: ProvAcc) -> ProvGraph:
     stats = acc["stats"]
     referenced: dict[str, None] = {}
     for rel in acc["entity_relations"]:
@@ -470,38 +484,38 @@ def _finish(acc: dict[str, Any]) -> dict[str, Any]:
         activity.pop("has_main", None)
         activity.pop("nused", None)
         activity.pop("ngen", None)
-    return {
-        "entities": entities,
-        "entity_relations": acc["entity_relations"],
-        "types": types,
-        "activities": activities,
-        "files": [],
-        "mounts": [],
-        "accesses": [],
-        "entity_files": [],
-        "stats": {
-            "entities": len(entities),
-            "activities": len(activities),
-            "entity_records": stats["entity_records"],
-            "prov_events": stats["prov_events"],
-            "cont_events": stats["cont_events"],
-            "dangling_hashes": stats["dangling_hashes"],
-            "isolated_entities": stats["isolated_entities"],
-            "truncated_activities": stats["truncated_activities"],
-            "orphan_chunks": stats["orphan_chunks"],
-            "files": 0,
-            "mounts": 0,
-            "io_events": 0,
-            "io_attributed": 0,
-            "files_excluded": 0,
-        },
-    }
+    return ProvGraph(
+        entities=entities,
+        entity_relations=acc["entity_relations"],
+        types=types,
+        activities=cast("list[Activity]", activities),
+        files=[],
+        mounts=[],
+        accesses=[],
+        entity_files=[],
+        stats=ProvStats(
+            entities=len(entities),
+            activities=len(activities),
+            entity_records=stats["entity_records"],
+            prov_events=stats["prov_events"],
+            cont_events=stats["cont_events"],
+            dangling_hashes=stats["dangling_hashes"],
+            isolated_entities=stats["isolated_entities"],
+            truncated_activities=stats["truncated_activities"],
+            orphan_chunks=stats["orphan_chunks"],
+            files=0,
+            mounts=0,
+            io_events=0,
+            io_attributed=0,
+            files_excluded=0,
+        ),
+    )
 
 
-def _span_index(activities: list[dict[str, Any]]) -> dict[int, list[tuple[int, int, str]]]:
+def _span_index(activities: list[Activity]) -> dict[int, list[tuple[int, int, str]]]:
     spans: dict[int, list[tuple[int, int, str]]] = defaultdict(list)
     for a in activities:
-        spans[a["pid"]].append((a["ts"], a["ts"] + a["dur"], a["aid"]))
+        spans[a["pid"]].append((int(a["ts"]), int(a["ts"] + a["dur"]), a["aid"]))
     for v in spans.values():
         v.sort()
     return spans
@@ -552,15 +566,15 @@ def build(
     include_io: bool = True,
     include_all_files: bool = False,
     mounts: tuple[str, ...] = (),
-) -> dict[str, Any]:
+) -> ProvGraph:
     """The provenance graph of the loaded trace, in the web viewer's JSON shape."""
-    acc: dict[str, Any] = {
-        "entities": {},
-        "activities": {},
-        "types": {},
-        "entity_relations": [],
-        "stats": defaultdict(int),
-    }
+    acc = ProvAcc(
+        entities={},
+        activities={},
+        types={},
+        entity_relations=[],
+        stats=defaultdict(int),
+    )
     query = (
         None
         if _relation_columns(trace)
@@ -586,7 +600,7 @@ def build(
 
 def _attribute_io(
     trace: "TraceData",
-    graph: dict[str, Any],
+    graph: ProvGraph,
     include_all_files: bool,
     mounts: tuple[str, ...],
 ) -> None:
@@ -665,7 +679,7 @@ def _attribute_io(
     def keep(path: str) -> bool:
         return include_all_files or not _excluded(path)
 
-    files: dict[str, dict[str, str]] = {}
+    files: dict[str, ProvFile] = {}
     dropped: set[str] = set()
 
     def add_file(fhash: str, path: str) -> bool:
@@ -676,7 +690,7 @@ def _attribute_io(
         if not keep(path):
             dropped.add(path)
             return False
-        files[path] = {"fhash": fhash, "path": path, "mount": "", "rel": ""}
+        files[path] = ProvFile(fhash=fhash, path=path, mount="", rel="")
         return True
 
     for (aid, fhash, op), (calls, nbytes) in agg.items():
@@ -684,14 +698,7 @@ def _attribute_io(
         if not add_file(fhash, path):
             continue
         graph["accesses"].append(
-            {
-                "aid": aid,
-                "fhash": fhash,
-                "path": path,
-                "op": op,
-                "calls": calls,
-                "bytes": nbytes,
-            }
+            Access(aid=aid, fhash=fhash, path=path, op=op, calls=calls, bytes=nbytes)
         )
 
     for entity in graph["entities"]:
@@ -705,7 +712,7 @@ def _attribute_io(
             ):
                 if add_file(h, path):
                     graph["entity_files"].append(
-                        {"entity": entity["hash"], "fhash": h, "path": path}
+                        EntityFile(entity=entity["hash"], fhash=h, path=path)
                     )
 
     graph["stats"]["files_excluded"] = len(dropped)
@@ -726,9 +733,8 @@ def _attribute_io(
             mount_type[mount] = kind
 
     graph["files"] = sorted(files.values(), key=lambda f: f["path"])
-    graph["mounts"] = sorted(
-        ({"path": m, "fstype": t} for m, t in mount_type.items()), key=lambda m: m["path"]
-    )
+    mounts_out = [Mount(path=m, fstype=t) for m, t in mount_type.items()]
+    graph["mounts"] = sorted(mounts_out, key=lambda m: m["path"])
     graph["accesses"].sort(key=lambda a: (a["aid"], a["path"], a["op"]))
     graph["entity_files"].sort(key=lambda e: (e["entity"], e["path"]))
     graph["stats"]["files"] = len(graph["files"])
@@ -743,7 +749,7 @@ def _add_io(
     slot[1] += nbytes
 
 
-def _rows(frame: "DataFrame") -> Iterator[dict[str, Any]]:
+def _rows(frame: "DataFrame") -> Iterator[Row]:
     data = frame.to_dict()
     if not data:
         return

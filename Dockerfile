@@ -21,8 +21,6 @@ COPY pyproject.toml README.md hatch_build.py ./
 COPY python/ ./python/
 # Same place the wheel puts it, so the runtime needs no --web-dist.
 COPY --from=web /web/dist ./python/dftracer/dashboard/web_dist
-# The SPA is built above, so the wheel hook must not look for npm here.
-ENV DFDASHBOARD_SKIP_WEB=1
 # --no-sources ignores any [tool.uv.sources] override (e.g. a local dev path for
 # dftracer-utils) so the image always resolves dependencies from the index.
 RUN uv venv /opt/venv \

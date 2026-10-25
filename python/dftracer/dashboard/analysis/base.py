@@ -4,33 +4,44 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
-from typing import Any, Callable, ClassVar
+from typing import TYPE_CHECKING, Callable, ClassVar, Optional, Protocol, cast
+
+if TYPE_CHECKING:
+    from ..trace import TraceData
 
 from pydantic import BaseModel
 
 PIPELINE_ENTRY_GROUP = "dftracer.dashboard.pipelines"
 
 
+class SubmitClient(Protocol):
+    """The bit of a Dask client a pipeline uses, so `distributed` stays optional."""
+
+    def submit(self, fn: Callable[..., object], *args: object, **kwargs: object) -> object: ...
+
+
 @dataclass
 class RunContext:
     on_progress: Callable[[float, str], None] = lambda frac, msg="": None
-    on_partial: Callable[[Any], None] = lambda payload: None
+    on_partial: Callable[[object], None] = lambda payload: None
     cancel: asyncio.Event = field(default_factory=asyncio.Event)
-    client: Any = None
-    data: Any = None
-    client_provider: Any = None  # async () -> Dask client; spawns lazily
+    client: Optional[object] = None
+    data: Optional["TraceData"] = None
+    # async () -> the cluster client; spawns it lazily on first use
+    client_provider: Optional[Callable[[], Awaitable[object]]] = None
 
-    async def get_client(self) -> Any:
+    async def get_client(self) -> SubmitClient:
         if self.client is None and self.client_provider is not None:
             self.client = await self.client_provider()
-        return self.client
+        return cast("SubmitClient", self.client)
 
     def progress(self, frac: float, msg: str = "") -> None:
         self.on_progress(frac, msg)
 
-    def emit(self, payload: Any) -> None:
+    def emit(self, payload: object) -> None:
         self.on_partial(payload)
 
     @property
@@ -40,8 +51,10 @@ class RunContext:
 
 @dataclass
 class Result:
-    data: Any = None
-    meta: dict[str, Any] = field(default_factory=dict)
+    """A pipeline's output: the payload a card or a table renders, plus notes."""
+
+    data: object = None
+    meta: dict[str, object] = field(default_factory=dict)
 
 
 class Pipeline(ABC):
@@ -55,7 +68,7 @@ class Pipeline(ABC):
     @abstractmethod
     async def run(self, ctx: RunContext, params: BaseModel) -> Result: ...
 
-    def describe(self) -> dict[str, Any]:
+    def describe(self) -> dict[str, object]:
         return {
             "id": self.id,
             "label": self.label,

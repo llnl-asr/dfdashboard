@@ -1,4 +1,1 @@
-from .metadata import TraceMeta
-from .trace import TraceData
-
-__all__ = ["TraceData", "TraceMeta"]
+"""Trace file handling: the watcher over a run tree, provenance, call trees."""

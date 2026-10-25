@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, AsyncIterator, Optional
+from typing import AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from ..core.errors import NOT_WATCHING, ApiError
+from ..data.run_types import Snapshot
 from ..data.watch import RunRegistry
 from .deps import get_registry
 
@@ -20,19 +21,19 @@ log = logging.getLogger(__name__)
 _KEEPALIVE_S = 15.0
 
 
-def _snapshot(registry: RunRegistry) -> dict[str, Any]:
+def _snapshot(registry: RunRegistry) -> Snapshot:
     try:
         return registry.snapshot()
     except Exception as exc:
         log.warning("run snapshot failed: %s", exc)
-        return {"root": registry.root, "seq": registry.seq, "runs": []}
+        return Snapshot(root=registry.root, watch="", seq=registry.seq, runs=[])
 
 
 @router.get("/runs")
-async def runs(registry: Optional[RunRegistry] = Depends(get_registry)) -> dict[str, Any]:
+async def runs(registry: Optional[RunRegistry] = Depends(get_registry)) -> Snapshot:
     reg = registry
     if reg is None:
-        return {"root": "", "seq": 0, "runs": []}
+        return Snapshot(root="", watch="", seq=0, runs=[])
     return await asyncio.to_thread(_snapshot, reg)
 
 

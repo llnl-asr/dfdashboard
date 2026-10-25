@@ -21,15 +21,12 @@ dependencies = [
   "pydantic-settings>=2.16",
   "pyarrow>=26",
   "numpy>=2.5",
-  "numba>=0.68",
   "reactivex>=6",
-  # dftracer-analyzer pins rich~=14.1.0, so 14 is the highest floor that resolves.
   "rich>=14",
-  # .dev0 floors opt these two into the develop-branch prerelease wheels and
-  # still accept later finals (a floor carrying a prerelease segment is what
+  # A .dev0 floor opts the requirement into the develop-branch prerelease wheels
+  # and still accepts later finals (a floor carrying a prerelease segment is what
   # makes pip and uv resolve prereleases for that requirement).
   "dftracer-utils>=0.0.14.dev0",
-  "dftracer-analyzer>=0.0.9.post61.dev0",
 ]
 
 
@@ -64,8 +61,8 @@ include = ["python/dftracer", "web/dist", "README.md", "LICENSE"]
 
 [tool.hatch.build.targets.wheel]
 # dftracer/ carries no __init__.py: it is a PEP 420 namespace shared with
-# dftracer-utils and dftracer-analyzer, so this wheel contributes only its own
-# child. sources=python makes the wheel path dftracer/dashboard/...
+# dftracer-utils, so this wheel contributes only its own child.
+# sources=python makes the wheel path dftracer/dashboard/...
 only-include = ["python/dftracer"]
 sources = ["python"]
 

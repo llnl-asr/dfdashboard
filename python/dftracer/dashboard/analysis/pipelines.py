@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import importlib.util
 import logging
-import os
-import tempfile
 from collections import defaultdict
-from typing import Literal, Optional
+from collections.abc import Awaitable
+from typing import TYPE_CHECKING, Optional, cast
 
 from pydantic import BaseModel
 
 from .base import Pipeline, Result, RunContext, register_pipeline
+
+if TYPE_CHECKING:
+    from ..trace import TraceData
 
 log = logging.getLogger(__name__)
 
@@ -40,59 +41,11 @@ class IOSummaryPipeline(Pipeline):
         return Result(data={"bytes_by_host": dict(by_host)}, meta={"hosts": len(by_host)})
 
 
-class DFAnalyzerParams(BaseModel):
-    trace_path: Optional[str] = None  # defaults to the loaded trace's directory
-    time_granularity: float = 1.0
-    # "none" analyzes in this process with no Dask. "external" runs the scan
-    # on the dashboard's own threads-only cluster, which still needs no child
-    # process and no signal handlers.
-    cluster: Literal["none", "external"] = "none"
-
-
-class DFAnalyzerPipeline(Pipeline):
-    id = "dfanalyzer"
-    label = "DFAnalyzer deep analysis"
-    description = "Run dftracer-analyzer's fact engine; returns the fact envelope."
-    Params = DFAnalyzerParams
-
-    async def run(self, ctx: RunContext, params: BaseModel) -> Result:
-        assert isinstance(params, DFAnalyzerParams)
-        trace_path = params.trace_path or (ctx.data.trace_dir if ctx.data else "")
-        if not trace_path:
-            raise ValueError("no trace_path and no loaded trace")
-        trace_path = os.path.abspath(trace_path)
-        out_dir = _dfa_dir(trace_path)
-
-        ctx.progress(0.1, "starting analyzer")
-        from ._dfa import analyze, warmup
-
-        if not warmup():
-            raise RuntimeError(
-                "dfanalyzer must be imported from the main thread; the server does this at startup"
-            )
-        address = ""
-        if params.cluster == "external":
-            client = await ctx.get_client()
-            address = client.scheduler.address
-        res = await asyncio.to_thread(
-            analyze, trace_path, params.time_granularity, out_dir, params.cluster, address
-        )
-
-        ctx.progress(1.0, "done")
-        mv = os.path.join(out_dir, "main_view.parquet")
-        res["main_view_path"] = mv if os.path.exists(mv) else ""
-        return Result(
-            data=res,
-            meta={"facts": len(res.get("facts") or []), "rows": len(res.get("columns") or [])},
-        )
-
-
-def _dfa_dir(trace_path: str) -> str:
-    """A stable output directory per trace, so re-runs reuse it."""
-    digest = hashlib.sha1(trace_path.encode()).hexdigest()[:16]
-    path = os.path.join(tempfile.gettempdir(), "dfdashboard-dfa", digest)
-    os.makedirs(path, exist_ok=True)
-    return path
+def _loaded(ctx: RunContext) -> "TraceData":
+    """The trace this run reads, or a clear error when nothing is loaded."""
+    if ctx.data is None:
+        raise ValueError("no trace loaded")
+    return ctx.data
 
 
 class BandwidthScanParams(BaseModel):
@@ -111,10 +64,11 @@ class BandwidthScanPipeline(Pipeline):
 
         import pyarrow.ipc as ipc
 
-        info = await asyncio.to_thread(ctx.data.info)
+        trace = _loaded(ctx)
+        info = await asyncio.to_thread(trace.info)
         span = info.global_max_ts - info.global_min_ts
         n = max(params.buckets, 1)
-        data = await asyncio.to_thread(ctx.data.counters_arrow, 0.0, float(span), n, None)
+        data = await asyncio.to_thread(trace.counters_arrow, 0.0, float(span), n, None)
         tbl = ipc.open_stream(_io.BytesIO(data)).read_all()
         read = tbl.column("read_bytes").to_pylist()
         write = tbl.column("write_bytes").to_pylist()
@@ -178,7 +132,7 @@ class CardComputePipeline(Pipeline):
                 getattr(trace, "paths", None),
                 pure=False,
             )
-            data = await fut
+            data = await cast("Awaitable[object]", fut)
         else:
             ctx.progress(0.4, "querying index")
             data = await asyncio.to_thread(
@@ -193,5 +147,3 @@ def register_builtins() -> None:
     register_pipeline(IOSummaryPipeline())
     register_pipeline(BandwidthScanPipeline())
     register_pipeline(CardComputePipeline())
-    if importlib.util.find_spec("dftracer.analyzer") is not None:
-        register_pipeline(DFAnalyzerPipeline())

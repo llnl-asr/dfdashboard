@@ -15,7 +15,7 @@ import functools
 import logging
 import os
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 log = logging.getLogger(__name__)
 
@@ -66,10 +66,10 @@ class Pools:
         loop.set_default_executor(self.io)
         self._bound = True
 
-    def submit_compute(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Future:
+    def submit_compute[T](self, fn: Callable[..., T], *args: object, **kwargs: object) -> Future[T]:
         return self.compute.submit(functools.partial(fn, *args, **kwargs))
 
-    async def run_compute(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    async def run_compute[T](self, fn: Callable[..., T], *args: object, **kwargs: object) -> T:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self.compute, functools.partial(fn, *args, **kwargs))
 
