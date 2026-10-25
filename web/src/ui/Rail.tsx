@@ -31,6 +31,8 @@ const ICON_FLAME =
   '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><rect x="2" y="2.5" width="12" height="2.4" rx="1"/><rect x="2" y="6.3" width="8" height="2.4" rx="1"/><rect x="2" y="10.1" width="4" height="2.4" rx="1"/></svg>';
 const ICON_SANDWICH =
   '<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><rect x="2" y="2.6" width="12" height="2.4" rx="1" opacity=".45"/><rect x="2" y="6.3" width="12" height="2.4" rx="1"/><rect x="2" y="10" width="12" height="2.4" rx="1" opacity=".45"/></svg>';
+const ICON_PROV =
+  '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="3.5" cy="4" r="2"/><circle cx="3.5" cy="12" r="2"/><circle cx="12.5" cy="8" r="2"/><path d="M5.5 4.6 10.6 7.3M5.5 11.4 10.6 8.7"/></svg>';
 const ICON_API =
   '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5.5 4 2 8l3.5 4M10.5 4 14 8l-3.5 4"/></svg>';
 const ICON_ANALYSIS =
@@ -38,7 +40,14 @@ const ICON_ANALYSIS =
 const ICON_GEAR =
   '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4"/></svg>';
 
-export const TRACE_VIEWS = ["overview", "timeline", "flamegraph", "sandwich", "api"] as const;
+export const TRACE_VIEWS = [
+  "overview",
+  "timeline",
+  "flamegraph",
+  "sandwich",
+  "provenance",
+  "api",
+] as const;
 export type TraceView = (typeof TRACE_VIEWS)[number];
 
 const VIEW_ITEMS: [TraceView, string, string][] = [
@@ -46,7 +55,7 @@ const VIEW_ITEMS: [TraceView, string, string][] = [
   ["timeline", "Timeline", ICON_TIMELINE],
   ["flamegraph", "Flamegraph", ICON_FLAME],
   ["sandwich", "Sandwich", ICON_SANDWICH],
-  ["api", "API", ICON_API],
+  ["provenance", "Provenance", ICON_PROV],
 ];
 
 // The one nav shell for every page. Trace views are query-param routes on "/"
@@ -98,6 +107,15 @@ export function Rail(props: { onSettings?: () => void; settingsActive?: boolean 
         </A>
       </div>
       <div class="nav-bottom">
+        <A
+          href="/?view=api"
+          class="nav-item"
+          title="API"
+          classList={{ active: onTrace() && activeView() === "api" }}
+        >
+          <span class="nav-icon" innerHTML={ICON_API} />
+          <span class="nav-label">API</span>
+        </A>
         {props.onSettings && (
           <button
             type="button"

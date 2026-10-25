@@ -17,10 +17,10 @@ RUN apt-get -o APT::Sandbox::User=root update \
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 ENV UV_LINK_MODE=copy
 WORKDIR /src
-COPY pyproject.toml README.md ./
-COPY dfdashboard/ ./dfdashboard/
+COPY pyproject.toml README.md hatch_build.py ./
+COPY python/ ./python/
 # Same place the wheel puts it, so the runtime needs no --web-dist.
-COPY --from=web /web/dist ./dfdashboard/web_dist
+COPY --from=web /web/dist ./python/dftracer/dashboard/web_dist
 # --no-sources ignores any [tool.uv.sources] override (e.g. a local dev path for
 # dftracer-utils) so the image always resolves dependencies from the index.
 RUN uv venv /opt/venv \

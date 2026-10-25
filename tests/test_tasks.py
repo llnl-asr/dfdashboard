@@ -1,10 +1,9 @@
 import asyncio
 
 import pytest
+from dftracer.dashboard.analysis.base import Pipeline, Result, RunContext
+from dftracer.dashboard.runtime import EventBus, InProcessTaskBackend, TaskSpec, TaskState
 from pydantic import BaseModel
-
-from dfdashboard.analysis.base import Pipeline, Result, RunContext
-from dfdashboard.runtime import EventBus, InProcessTaskBackend, TaskSpec, TaskState
 
 
 class EchoParams(BaseModel):
@@ -31,12 +30,14 @@ def make_backend(pipelines):
 
 
 async def wait_state(backend, task_id, state, timeout=3.0):
-    async with asyncio.timeout(timeout):
+    async def poll():
         while True:
             rec = backend.get(task_id)
             if rec and rec.state == state:
                 return rec
             await asyncio.sleep(0.01)
+
+    return await asyncio.wait_for(poll(), timeout)
 
 
 @pytest.mark.asyncio
@@ -97,7 +98,6 @@ async def test_events_emitted():
 
     task = asyncio.create_task(collect())
     await backend.submit(TaskSpec(pipeline_id="echo", params={"value": 2}))
-    async with asyncio.timeout(3.0):
-        await task
+    await asyncio.wait_for(task, 3.0)
     assert "running" in seen and "done" in seen
     await backend.stop()

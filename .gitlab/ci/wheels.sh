@@ -29,13 +29,13 @@ PODMAN_RUNROOT=/var/tmp/$USER/podman-run
 mkdir -p "$PODMAN_STORE" "$PODMAN_RUNROOT"
 PODMAN="podman --root $PODMAN_STORE --runroot $PODMAN_RUNROOT"
 
-rm -rf wheelhouse dfdashboard/web_dist
+rm -rf wheelhouse python/dftracer/dashboard/web_dist
 $PODMAN run --rm --user 0:0 -v "$PWD:/ws" -w /ws/web docker.io/library/node:20-slim bash -ec '
   npm ci
   npm run build
 '
-cp -r web/dist dfdashboard/web_dist
-test -s dfdashboard/web_dist/index.html
+cp -r web/dist python/dftracer/dashboard/web_dist
+test -s python/dftracer/dashboard/web_dist/index.html
 
 # hatchling offers no version override, and the checkout is disposable.
 sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
@@ -50,9 +50,9 @@ git checkout -- pyproject.toml
 $PODMAN run --rm --user 0:0 -v "$PWD:/ws" -w /ws docker.io/library/python:3.12 bash -ec '
   python3 -c "
 import glob, zipfile, sys
-whl = glob.glob(\"wheelhouse/dfdashboard-*.whl\")[0]
+whl = glob.glob(\"wheelhouse/dftracer_dashboard-*.whl\")[0]
 names = zipfile.ZipFile(whl).namelist()
-assert \"dfdashboard/web_dist/index.html\" in names, \"SPA missing from the wheel\"
+assert \"dftracer/dashboard/web_dist/index.html\" in names, \"SPA missing from the wheel\"
 print(f\"{whl}: SPA bundled\")
 "
 '

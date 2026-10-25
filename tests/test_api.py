@@ -1,30 +1,25 @@
-import gzip
 import io
-import os
 
 import pytest
+from traces import meta, posix, write_trace  # noqa: E402
 
 pytest.importorskip("dftracer.utils")
-pytest.importorskip("polars")
 
+from dftracer.dashboard.config import Settings  # noqa: E402
+from dftracer.dashboard.server import create_app  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-
-from dfdashboard.config import Settings  # noqa: E402
-from dfdashboard.server import create_app  # noqa: E402
 
 
 def _write_trace(directory: str) -> str:
-    lines = ["["]
-    base = 1_000_000
-    for i in range(5):
-        lines.append(
-            f'{{"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":{base + i * 100},'
-            f'"dur":10,"ph":"X","args":{{"ret":1024}}}}'
-        )
-    path = os.path.join(directory, "t.pfw.gz")
-    with gzip.open(path, "wt") as fh:
-        fh.write("\n".join(lines) + "\n")
-    return path
+    """A trace with the host and file names the view labels events with."""
+    return write_trace(
+        directory,
+        [
+            meta("HH", {"hhash": "hhash0123", "name": "node1", "value": "hhash0123"}),
+            meta("FH", {"name": "/scratch/data.bin", "value": "fhash0123"}),
+            *posix(5, ret=1024),
+        ],
+    )
 
 
 @pytest.fixture
@@ -58,7 +53,9 @@ def test_events_arrow(client):
     r = client.get("/api/viz/events.arrow", params={"begin": 0, "end": 1_000_000})
     assert r.status_code == 200
     tbl = ipc.open_stream(io.BytesIO(r.content)).read_all()
-    assert tbl.num_rows == 5
+    # metadata (HH/FH) rides along so the view can label hosts and files
+    assert tbl.num_rows == 7
+    assert [p for p in tbl.column("ph").to_pylist() if p != "M"] == ["X"] * 5
 
 
 def test_info_totals(client):
@@ -90,6 +87,13 @@ def test_calltree(client):
     assert "read" in names
 
 
+def test_openapi_document_lives_under_api(client):
+    spec = client.get("/api/openapi.json")
+    assert spec.status_code == 200
+    assert "/api/info" in spec.json()["paths"]
+    assert client.get("/api/docs").status_code == 200
+
+
 def test_proctree(client):
     nodes = client.get("/api/viz/proctree").json()["nodes"]
     assert nodes[0]["pid"] == 1
@@ -110,9 +114,8 @@ def test_no_trace_503(tmp_path):
 def test_pipelines_and_task_flow(client):
     import time
 
+    from dftracer.dashboard.analysis.base import Pipeline, Result, RunContext, register_pipeline
     from pydantic import BaseModel
-
-    from dfdashboard.analysis.base import Pipeline, Result, RunContext, register_pipeline
 
     class EchoParams(BaseModel):
         pass
@@ -147,3 +150,59 @@ def test_missing_trace_path_errors(tmp_path):
     with pytest.raises(RuntimeError):
         with TestClient(create_app(settings)):
             pass
+
+
+def test_viz_columns(client):
+    d = client.get("/api/viz/columns").json()
+    assert d["ready"] is True
+    assert "name" in d["columns"]
+    assert "args.ret" in d["columns"]
+
+
+def test_viz_untimed(client):
+    d = client.get("/api/viz/untimed").json()
+    assert d["count"] == 2
+    assert [e["name"] for e in d["events"]] == ["HH", "FH"]
+    assert {e["ph"] for e in d["events"]} == {"M"}
+    page = client.get("/api/viz/untimed", params={"limit": 1, "offset": 1}).json()
+    assert [e["name"] for e in page["events"]] == ["FH"]
+
+
+def test_rowset_files_and_hosts(client):
+    d = client.get("/api/rowset", params={"name": "files"}).json()
+    assert d["names"] == {"fhash0123": "/scratch/data.bin"}
+    hosts = client.get("/api/rowset", params={"name": "hosts"}).json()
+    assert hosts["names"] == {"hhash0123": "node1"}
+    only = client.get("/api/rowset", params={"name": "files", "keys": "nope"}).json()
+    assert only["names"] == {}
+
+
+def test_file_scope(tmp_path):
+    first = _write_trace(str(tmp_path))
+    second = write_trace(tmp_path, posix(1, pid=2, start=2_000_000, ret=7), "u.pfw.gz")
+    app = create_app(Settings(trace_paths=[first, second], index_dir=str(tmp_path / "idx")))
+    with TestClient(app) as client:
+        assert client.get("/api/info").json()["num_events"] == 6
+        scoped = client.get("/api/info", params={"file": second}).json()
+        assert scoped["num_events"] == 1
+        assert scoped["file_count"] == 2  # n_files is the loaded set, not the scope
+        bad = client.get("/api/info", params={"file": "/nope.pfw.gz"})
+        assert bad.status_code == 404
+
+
+def test_errors_carry_a_machine_readable_code(tmp_path):
+    # The SPA branches on the code, so a rewording of the detail must not be a
+    # breaking change for it.
+    app = create_app(
+        Settings(trace_paths=[_write_trace(str(tmp_path))], index_dir=str(tmp_path / "idx"))
+    )
+    with TestClient(app) as client:
+        missing = client.get("/api/info", params={"run": "nope"})
+        assert missing.status_code == 404
+        assert missing.json()["code"] == "no_such_run"
+        assert missing.json()["detail"].startswith("no run: ")
+
+        bad = client.get("/api/viz/events.arrow", params={"begin": 0, "end": 10, "query": "&&&"})
+        assert bad.status_code in (400, 422)
+        if bad.status_code == 400:
+            assert bad.json()["code"] == "invalid_query"

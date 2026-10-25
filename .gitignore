@@ -70,6 +70,7 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+_build/
 
 # PyBuilder
 .pybuilder/
@@ -197,4 +198,9 @@ ARCHITECTURE.md
 
 outputs
 spike/
-dfdashboard/web_dist/
+python/dftracer/dashboard/web_dist/
+
+# Playwright
+web/test-results/
+web/playwright-report/
+web/.playwright/

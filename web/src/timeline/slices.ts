@@ -31,6 +31,9 @@ export function splitSlices(batch: RecordBatch): TimelineBatch {
         dur: Number(o.dur ?? 0),
         depth: Number(o.depth ?? 0),
         args,
+        agg: Number(o.agg ?? 0) === 1,
+        count: Number(o.count ?? 1),
+        total: Number(o.total ?? o.dur ?? 0),
       });
     } else {
       density.push({

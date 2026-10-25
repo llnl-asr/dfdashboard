@@ -10,6 +10,10 @@ export interface TraceEvent {
   ph: string;
   args?: Record<string, unknown>;
   depth?: number; // server-computed containment depth (live path only)
+  // ph=3 aggregated record: dur is the window, count/total the real statistics
+  agg?: boolean;
+  count?: number;
+  total?: number;
   [key: string]: unknown;
 }
 
