@@ -125,3 +125,14 @@ Install the git hooks (ruff, ruff-format, and ty on staged Python) with
 ## Authors
 
 Ray A. O. Sinurat <raydreww@gmail.com>
+
+## License
+
+DFDashboard is distributed under the terms of the MIT license.
+All new contributions must be made under this license.
+
+See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
+
+SPDX-License-Identifier: MIT
+
+LLNL-CODE-2024514 — Applied Storage Research (ASR)
