@@ -20,29 +20,10 @@ import {
   Show,
 } from "solid-js";
 import { fetchProvGraph, type ProvGraphResponse } from "../data/api";
+import { PALETTE } from "./typegraph";
 import "./prov.css";
 
 cytoscape.use(dagre);
-
-// Categorical palette readable on both the dark and light themes.
-const PALETTE = [
-  "#4e9fd6",
-  "#e6a13c",
-  "#5fb87a",
-  "#d9675f",
-  "#a07bd1",
-  "#3fb5a8",
-  "#d4c04a",
-  "#e07fb3",
-  "#7f9cc2",
-  "#b8865a",
-  "#8fbf4d",
-  "#c26d9e",
-  "#5c8f8a",
-  "#d98f4e",
-  "#6f7fd6",
-  "#9aa55a",
-];
 
 // I/O edge kinds; read/write/delete shown by default, open/stat-only optional.
 const IO_OPS = [

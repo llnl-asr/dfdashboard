@@ -389,9 +389,15 @@ export function openProvStream(
   onDelta: (items: ProvDelta[]) => void,
 ): () => void {
   if (typeof EventSource === "undefined") return () => {};
-  const es = new EventSource(apiUrl(`/api/prov/stream?${withScope(new URLSearchParams(), scope).toString()}`));
-  es.addEventListener("snapshot", (ev) => onSnapshot(JSON.parse((ev as MessageEvent).data) as ProvGraphResponse));
-  es.addEventListener("delta", (ev) => onDelta((JSON.parse((ev as MessageEvent).data) as { items: ProvDelta[] }).items));
+  const es = new EventSource(
+    apiUrl(`/api/prov/stream?${withScope(new URLSearchParams(), scope).toString()}`),
+  );
+  es.addEventListener("snapshot", (ev) =>
+    onSnapshot(JSON.parse((ev as MessageEvent).data) as ProvGraphResponse),
+  );
+  es.addEventListener("delta", (ev) =>
+    onDelta((JSON.parse((ev as MessageEvent).data) as { items: ProvDelta[] }).items),
+  );
   return () => es.close();
 }
 

@@ -1,4 +1,5 @@
-"""Provenance read while the service writes the trace: whole gzip members only, and I/O attributed in either arrival order."""
+"""Provenance read while the service writes the trace: whole gzip members only, and I/O
+attributed in either arrival order."""
 
 import gzip
 import json
@@ -11,11 +12,25 @@ def member(*records):
 
 
 def eh(i, type_="t", uri=""):
-    return {"name": "EH", "cat": "dftracer", "ph": 4, "pid": 1, "args": {"id": i, "type": type_, "store": 2, "uri": uri}}
+    return {
+        "name": "EH",
+        "cat": "dftracer",
+        "ph": 4,
+        "pid": 1,
+        "args": {"id": i, "type": type_, "store": 2, "uri": uri},
+    }
 
 
 def act(ts, dur=20, name="step", **rel):
-    return {"name": name, "cat": "moirai", "ph": 1, "pid": 1, "ts": ts, "dur": dur, "args": {"relations": rel}}
+    return {
+        "name": name,
+        "cat": "moirai",
+        "ph": 1,
+        "pid": 1,
+        "ts": ts,
+        "dur": dur,
+        "args": {"relations": rel},
+    }
 
 
 def fh(path, h):
@@ -23,7 +38,15 @@ def fh(path, h):
 
 
 def io(name, ts, h, **a):
-    return {"name": name, "cat": "POSIX", "ph": 1, "pid": 1, "ts": ts, "dur": 1, "args": {"fhash": h, **a}}
+    return {
+        "name": name,
+        "cat": "POSIX",
+        "ph": 1,
+        "pid": 1,
+        "ts": ts,
+        "dur": 1,
+        "args": {"fhash": h, **a},
+    }
 
 
 def test_tail_commits_whole_members_only(tmp_path):
@@ -70,7 +93,15 @@ def test_feed_streams_what_each_record_adds(tmp_path):
 
 
 def test_io_before_its_activity_goes_to_the_innermost(tmp_path):
-    (tmp_path / "t.pfw.gz").write_bytes(member(fh("/d/a", "f"), io("write", 25, "f", ret=9), act(20, 10, "inner"), act(10, 40, "outer"), io("read", 26, "f", ret=1)))
+    (tmp_path / "t.pfw.gz").write_bytes(
+        member(
+            fh("/d/a", "f"),
+            io("write", 25, "f", ret=9),
+            act(20, 10, "inner"),
+            act(10, 40, "outer"),
+            io("read", 26, "f", ret=1),
+        )
+    )
     feed = ProvFeed([str(tmp_path)])
     feed.poll()
     acc = {(a["aid"], a["op"]): (a["calls"], a["bytes"]) for a in feed.accesses()}
@@ -78,7 +109,15 @@ def test_io_before_its_activity_goes_to_the_innermost(tmp_path):
 
 
 def test_system_files_are_left_out_and_a_late_name_still_shows(tmp_path):
-    (tmp_path / "t.pfw.gz").write_bytes(member(fh("/usr/lib/x.py", "p"), act(10), io("read", 12, "p"), io("open64", 13, "f"), fh("/d/late", "f")))
+    (tmp_path / "t.pfw.gz").write_bytes(
+        member(
+            fh("/usr/lib/x.py", "p"),
+            act(10),
+            io("read", 12, "p"),
+            io("open64", 13, "f"),
+            fh("/d/late", "f"),
+        )
+    )
     feed = ProvFeed([str(tmp_path)])
     feed.poll()
     assert [a["path"] for a in feed.accesses()] == ["/d/late"]
@@ -86,6 +125,7 @@ def test_system_files_are_left_out_and_a_late_name_still_shows(tmp_path):
 
 def test_stream_route_sends_a_snapshot_then_deltas(tmp_path):
     from dftracer.dashboard.api import prov as P
+
     (tmp_path / "t.pfw.gz").write_bytes(member(eh("a"), act(10, used=["a"])))
     feeds = {}
     feed = P.feed_for(feeds, "r", [str(tmp_path)])
