@@ -375,6 +375,26 @@ export function fetchLayers(scope: string, signal?: AbortSignal): Promise<Layers
 }
 
 // ---- provenance (/api/prov/graph) ----------------------------------------
+// A run's graph while its trace grows: one snapshot, then what each record added.
+export type ProvDelta =
+  | ({ kind: "type" } & ProvType)
+  | ({ kind: "entity" } & ProvEntity)
+  | ({ kind: "activity" } & ProvActivity)
+  | ({ kind: "relation" } & ProvEntityRelation)
+  | ({ kind: "access" } & ProvAccess);
+
+export function openProvStream(
+  scope: string,
+  onSnapshot: (g: ProvGraphResponse) => void,
+  onDelta: (items: ProvDelta[]) => void,
+): () => void {
+  if (typeof EventSource === "undefined") return () => {};
+  const es = new EventSource(apiUrl(`/api/prov/stream?${withScope(new URLSearchParams(), scope).toString()}`));
+  es.addEventListener("snapshot", (ev) => onSnapshot(JSON.parse((ev as MessageEvent).data) as ProvGraphResponse));
+  es.addEventListener("delta", (ev) => onDelta((JSON.parse((ev as MessageEvent).data) as { items: ProvDelta[] }).items));
+  return () => es.close();
+}
+
 export interface ProvEntity {
   hash: string;
   type: string;
