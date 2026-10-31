@@ -407,3 +407,16 @@ def test_end_check_falls_back_to_the_engine(tmp_path, monkeypatch):
     reg = _registry(str(root), str(tmp_path / "idx"))
     reg.refresh()
     assert reg.runs()[0].state == "done", "the engine must answer when the peek fails"
+
+
+def test_a_linked_format_dir_is_followed_and_other_links_are_not(tmp_path):
+    from dftracer.dashboard.data.watch import _list_dir
+
+    real = tmp_path / "elsewhere"
+    real.mkdir()
+    root = tmp_path / "root"
+    (root / "run").mkdir(parents=True)
+    (root / "run" / "raw").symlink_to(real, target_is_directory=True)
+    (root / "run" / "loop").symlink_to(root, target_is_directory=True)
+    dirs, _ = _list_dir(str(root / "run"))
+    assert dirs == [str(root / "run" / "raw")]

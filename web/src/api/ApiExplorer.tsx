@@ -4,7 +4,7 @@ import { apiRequest } from "../data/api";
 interface OApiParam {
   name: string;
   required?: boolean;
-  schema?: { default?: string };
+  schema?: { default?: unknown };
 }
 interface OApiOp {
   summary?: string;
@@ -77,10 +77,15 @@ function apiSpecHref(): string {
   return (base ? base.replace(/\/$/, "") : "") + "/api/openapi.json";
 }
 
+// A default is any JSON value, and an input holds text.
+function defaultText(p: OApiParam): string {
+  return String(p.schema?.default ?? "");
+}
+
 function Endpoint(props: { path: string; op: OApiOp }) {
   const params = () => props.op.parameters ?? [];
   const [vals, setVals] = createSignal<Record<string, string>>(
-    Object.fromEntries(params().map((p) => [p.name, p.schema?.default ?? ""])),
+    Object.fromEntries(params().map((p) => [p.name, defaultText(p)])),
   );
   const [resp, setResp] = createSignal<{ status: number; body: string } | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -132,7 +137,7 @@ function Endpoint(props: { path: string; op: OApiOp }) {
                 </span>
                 <input
                   value={vals()[p.name] ?? ""}
-                  placeholder={p.schema?.default ?? ""}
+                  placeholder={defaultText(p)}
                   onInput={(e) => setVals({ ...vals(), [p.name]: e.currentTarget.value })}
                 />
               </label>

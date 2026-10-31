@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import Request
 
 from ..core.errors import NO_SUCH_FILE, NO_SUCH_RUN, NO_TRACE_YET, ApiError
-from ..data.watch import RunRegistry
+from ..data.watch import NoTraceYet, RunRegistry
 from ..runtime import EventBus, InProcessTaskBackend
 from ..trace import TraceData
 
@@ -43,6 +43,10 @@ def get_trace(request: Request) -> TraceData:
                 cache[("run", run, "")] = registry.trace_for(run)
             except KeyError as exc:
                 raise ApiError(404, NO_SUCH_RUN, f"no run: {run}") from exc
+            except NoTraceYet as exc:
+                raise ApiError(
+                    503, NO_TRACE_YET, "no trace data yet, waiting for the first records"
+                ) from exc
         trace = cache[("run", run, "")]
     if trace is None:
         raise ApiError(503, NO_TRACE_YET, "no trace data yet, waiting for the first records")

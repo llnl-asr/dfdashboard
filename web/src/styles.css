@@ -449,6 +449,20 @@ body {
   color: var(--text);
 }
 
+.nav-section {
+  padding: 12px 12px 4px;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.leftnav.collapsed .nav-section {
+  height: 1px;
+  margin: 8px 10px;
+  padding: 0;
+  overflow: hidden;
+  background: var(--border);
+}
 .leftnav.collapsed .nav-label {
   display: none;
 }
