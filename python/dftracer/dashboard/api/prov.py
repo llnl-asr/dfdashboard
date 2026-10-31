@@ -21,6 +21,7 @@ from .deps import get_registry, get_trace
 router = APIRouter(prefix="/api", tags=["prov"])
 _cache = LRUCache(maxsize=8)
 _POLL_S = 0.5
+_READING_S = 0.3
 _KEEPALIVE_S = 15.0
 
 
@@ -78,7 +79,12 @@ async def prov_stream(request: Request, run: str = "") -> StreamingResponse:
         seq, quiet = snap["seq"], 0.0
         yield f"event: snapshot\ndata: {json.dumps(snap)}\n\n"
         while not await request.is_disconnected():
-            await asyncio.to_thread(feed.poll)
+            # A long read means a lot of new data: say so now, not when it is done.
+            reading = asyncio.create_task(asyncio.to_thread(feed.poll))
+            done, _ = await asyncio.wait({reading}, timeout=_READING_S)
+            if not done:
+                yield "event: reading\ndata: {}\n\n"
+                await reading
             items, seq = feed.since(seq)
             if items:
                 quiet = 0.0

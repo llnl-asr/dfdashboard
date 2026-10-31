@@ -46,6 +46,9 @@ export const TRACE_VIEWS = [
   "flamegraph",
   "sandwich",
   "provenance",
+  "prov-runtime",
+  "prov-temporal",
+  "prov-graph",
   "api",
 ] as const;
 export type TraceView = (typeof TRACE_VIEWS)[number];
@@ -55,7 +58,14 @@ const VIEW_ITEMS: [TraceView, string, string][] = [
   ["timeline", "Timeline", ICON_TIMELINE],
   ["flamegraph", "Flamegraph", ICON_FLAME],
   ["sandwich", "Sandwich", ICON_SANDWICH],
-  ["provenance", "Provenance", ICON_PROV],
+];
+
+// What a run does, when, and its graph over time and as a whole.
+const PROV_ITEMS: [TraceView, string, string][] = [
+  ["provenance", "Behaviors", ICON_PROV],
+  ["prov-runtime", "Runtime", ICON_TIMELINE],
+  ["prov-temporal", "Temporal graph", ICON_SANDWICH],
+  ["prov-graph", "Knowledge graph", ICON_PROV],
 ];
 
 // The one nav shell for every page. Trace views are query-param routes on "/"
@@ -84,6 +94,20 @@ export function Rail(props: { onSettings?: () => void; settingsActive?: boolean 
       </div>
       <div class="nav-views">
         <For each={VIEW_ITEMS}>
+          {([id, label, icon]) => (
+            <A
+              href={`/?view=${id}`}
+              class="nav-item"
+              title={label}
+              classList={{ active: onTrace() && activeView() === id }}
+            >
+              <span class="nav-icon" innerHTML={icon} />
+              <span class="nav-label">{label}</span>
+            </A>
+          )}
+        </For>
+        <div class="nav-section">Provenance</div>
+        <For each={PROV_ITEMS}>
           {([id, label, icon]) => (
             <A
               href={`/?view=${id}`}

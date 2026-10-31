@@ -1,16 +1,8 @@
 // The provenance of a run as a timeline: time runs top to bottom, the graph follows the run as it grows through
 // /api/prov/stream, and the right bar describes what is selected.
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
-import {
-  openProvStream,
-  type ProvAccess,
-  type ProvActivity,
-  type ProvDelta,
-  type ProvEntity,
-  type ProvEntityRelation,
-  type ProvGraphResponse,
-  type ProvType,
-} from "../data/api";
+import type { ProvEntity } from "../data/api";
+import type { LiveProv } from "./live";
 import { edgePath, entityLabel, type Graph, layout, leaf, type Placed, select } from "./temporal";
 
 const PALETTE = [
@@ -43,13 +35,15 @@ const fmtBytes = (n: number) =>
       ? (n / 1024).toFixed(1) + " KiB"
       : n + " B";
 
-export function ProvTimeline(props: { scope: string }) {
-  const [activities, setActivities] = createSignal<ProvActivity[]>([]);
-  const [entities, setEntities] = createSignal(new Map<string, ProvEntity>());
-  const [types, setTypes] = createSignal(new Map<string, ProvType>());
-  const [accesses, setAccesses] = createSignal<ProvAccess[]>([]);
-  const [relations, setRelations] = createSignal<ProvEntityRelation[]>([]);
-  const [ready, setReady] = createSignal(false);
+export function ProvTimeline(props: { live: LiveProv }) {
+  const activities = createMemo(() => props.live.data()?.activities ?? []);
+  const entities = createMemo(
+    () => new Map((props.live.data()?.entities ?? []).map((e) => [e.hash, e])),
+  );
+  const types = createMemo(() => new Map((props.live.data()?.types ?? []).map((t) => [t.name, t])));
+  const accesses = createMemo(() => props.live.data()?.accesses ?? []);
+  const relations = createMemo(() => props.live.data()?.entity_relations ?? []);
+  const ready = () => props.live.data() !== null;
   const [showActivities, setShowActivities] = createSignal(true);
   const [showIo, setShowIo] = createSignal(true);
   const [hiddenTypes, setHiddenTypes] = createSignal(new Set<string>());
@@ -58,39 +52,6 @@ export function ProvTimeline(props: { scope: string }) {
   const [scrollTop, setScrollTop] = createSignal(0);
   const [height, setHeight] = createSignal(800);
   let scroller!: HTMLDivElement;
-
-  const load = (d: ProvGraphResponse) => {
-    setActivities(d.activities ?? []);
-    setEntities(new Map((d.entities ?? []).map((e) => [e.hash, e])));
-    setTypes(new Map((d.types ?? []).map((t) => [t.name, t])));
-    setAccesses(d.accesses ?? []);
-    setRelations(d.entity_relations ?? []);
-    setReady(true);
-  };
-  const apply = (items: ProvDelta[]) => {
-    const acts: ProvActivity[] = [];
-    const acc: ProvAccess[] = [];
-    const rel: ProvEntityRelation[] = [];
-    const ents = new Map(entities());
-    const tys = new Map(types());
-    for (const i of items) {
-      if (i.kind === "activity") acts.push(i);
-      else if (i.kind === "access") acc.push(i);
-      else if (i.kind === "relation") rel.push(i);
-      else if (i.kind === "entity") ents.set(i.hash, i);
-      else tys.set(i.name, i);
-    }
-    setEntities(ents);
-    setTypes(tys);
-    if (acts.length) setActivities([...activities(), ...acts]);
-    if (acc.length) setAccesses([...accesses(), ...acc]);
-    if (rel.length) setRelations([...relations(), ...rel]);
-  };
-  createEffect(() => {
-    setReady(false);
-    const close = openProvStream(props.scope, load, apply);
-    onCleanup(close);
-  });
 
   const graph = createMemo<Graph>(() => ({
     activities: activities(),

@@ -387,6 +387,8 @@ export function openProvStream(
   scope: string,
   onSnapshot: (g: ProvGraphResponse) => void,
   onDelta: (items: ProvDelta[]) => void,
+  onLost?: () => void,
+  onReading?: () => void,
 ): () => void {
   if (typeof EventSource === "undefined") return () => {};
   const es = new EventSource(
@@ -398,6 +400,8 @@ export function openProvStream(
   es.addEventListener("delta", (ev) =>
     onDelta((JSON.parse((ev as MessageEvent).data) as { items: ProvDelta[] }).items),
   );
+  if (onReading) es.addEventListener("reading", onReading);
+  if (onLost) es.addEventListener("error", onLost); // EventSource reconnects by itself, and a new snapshot follows
   return () => es.close();
 }
 

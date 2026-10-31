@@ -11,9 +11,11 @@ import {
 } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 import { Rail, type TraceView } from "./ui/Rail";
+import type { ProvView } from "./prov/ProvTab";
 
 // The two views that carry heavy libraries (cytoscape, the analysis tables) are
 // split out: they load on the first visit, not when the trace boots.
+const isProvView = (v: string) => v === "provenance" || v.startsWith("prov-");
 const ProvenanceView = lazy(() => import("./prov/ProvTab").then((m) => ({ default: m.ProvTab })));
 const Analysis = lazy(() => import("./analysis/Analysis"));
 
@@ -2952,10 +2954,15 @@ export default function App() {
                 </div>
               </Show>
 
-              <Show when={view() === "provenance"}>
+              <Show when={isProvView(view())}>
                 <div class="body">
                   <Suspense fallback={<div class="view-loading">loading provenance...</div>}>
-                    <ProvenanceView mode={theme()} scope={runs.scope()} />
+                    <ProvenanceView
+                      view={view() as ProvView}
+                      mode={theme()}
+                      scope={runs.scope()}
+                      run={runs.list().find((r) => r.id === runs.scope())}
+                    />
                   </Suspense>
                 </div>
               </Show>

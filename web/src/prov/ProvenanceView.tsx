@@ -20,94 +20,26 @@ import {
   Show,
 } from "solid-js";
 import { fetchProvGraph, type ProvGraphResponse } from "../data/api";
+import type { LiveProv } from "./live";
 import { PALETTE } from "./typegraph";
 import "./prov.css";
 
 cytoscape.use(dagre);
 
-// I/O edge kinds; read/write/delete shown by default, open/stat-only optional.
-const IO_OPS = [
-  ["read", "read", "#3fb5a8"],
-  ["write", "write", "#e6a13c"],
-  ["delete", "delete / rename", "#d9675f"],
-  ["open", "open only", "#8a927c"],
-  ["meta", "stat / metadata", "#8a927c"],
-] as const;
-// Activity<->file link modes. "any" (default) is one link per pair; the others
-// are opt-in and their edges are only built when selected.
-const IO_MODES = [
-  ["any", "any I/O"],
-  ["data", "data (read or write)"],
-  ["meta", "metadata (open, stat, delete)"],
-  ["separate", "read / write separately"],
-] as const;
-type IoMode = (typeof IO_MODES)[number][0];
 const DATA_OPS = new Set(["read", "write"]);
 const FILE_COLOR = "#7f9cc2";
 const MOUNT_COLOR = "#a07bd1";
 
 const fileId = (path: string) => "F:" + path;
-const OP_COLOR = new Map<string, string>(IO_OPS.map(([op, , c]) => [op, c]));
-const DIR_COLOR: Record<string, string> = {
-  read: OP_COLOR.get("read") ?? "#3fb5a8",
-  write: OP_COLOR.get("write") ?? "#e6a13c",
-  meta: "#8a927c",
-  any: "#9aa7b4",
-};
+const IO_COLOR = "#9aa7b4";
 
-// Activity<->file edges for ONE mode. Only the active mode's edges exist, so
-// load and layout stay cheap; switching modes swaps them. "any" is one
-// undirected link per pair. Elsewhere direction follows the data: read-like
-// (read, open, stat) file -> activity; write and delete/rename activity -> file.
-function ioEdges(d: ProvGraphResponse, mode: IoMode): cytoscape.ElementDefinition[] {
-  const out: cytoscape.ElementDefinition[] = [];
-  const acc = d.accesses ?? [];
-  if (mode === "separate") {
-    for (const x of acc) {
-      const a = "A:" + x.aid;
-      const f = fileId(x.path);
-      const [source, target] = x.op === "write" || x.op === "delete" ? [a, f] : [f, a];
-      out.push({
-        data: {
-          source,
-          target,
-          kind: "io",
-          op: x.op,
-          calls: x.calls,
-          bytes: x.bytes,
-          color: OP_COLOR.get(x.op) ?? "#8a927c",
-        },
-      });
-    }
-    return out;
-  }
-  type Pair = { a: string; f: string; data: Set<string>; meta: Set<string> };
-  const pairs = new Map<string, Pair>();
-  for (const x of acc) {
-    const a = "A:" + x.aid;
-    const f = fileId(x.path);
-    const k = a + "\u001f" + f;
-    let pr = pairs.get(k);
-    if (!pr) {
-      pr = { a, f, data: new Set(), meta: new Set() };
-      pairs.set(k, pr);
-    }
-    (DATA_OPS.has(x.op) ? pr.data : pr.meta).add(x.op);
-  }
-  const push = (pr: Pair, dir: "read" | "write" | "meta" | "any", ops: Set<string>) => {
-    const deleteOnly = dir === "meta" && [...ops].every((o) => o === "delete");
-    const fromFile = dir === "read" || (dir === "meta" && !deleteOnly);
-    const [source, target] = fromFile ? [pr.f, pr.a] : [pr.a, pr.f];
-    out.push({ data: { source, target, kind: "ioagg", dir, color: DIR_COLOR[dir] } });
-  };
-  for (const pr of pairs.values()) {
-    if (mode === "any") push(pr, "any", new Set([...pr.data, ...pr.meta]));
-    else if (mode === "data") {
-      if (pr.data.has("read")) push(pr, "read", pr.data);
-      if (pr.data.has("write")) push(pr, "write", pr.data);
-    } else if (pr.meta.size) push(pr, "meta", pr.meta);
-  }
-  return out;
+// One link from an activity to each file it touched.
+function ioEdges(d: ProvGraphResponse): cytoscape.ElementDefinition[] {
+  const pairs = new Set((d.accesses ?? []).map((x) => "A:" + x.aid + "\u001f" + fileId(x.path)));
+  return [...pairs].map((p) => {
+    const [source, target] = p.split("\u001f");
+    return { data: { source, target, kind: "ioagg", dir: "any", color: IO_COLOR } };
+  });
 }
 
 // Display name for an entity. With the dftracer entity API the id is a 64-bit
@@ -146,36 +78,17 @@ function count(nodes: cytoscape.NodeCollection): [string, number][] {
   return [...m.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-export function ProvenanceView(props: { mode: "dark" | "light"; scope: string }) {
+export function ProvenanceView(props: { mode: "dark" | "light"; scope: string; live: LiveProv }) {
   let host!: HTMLDivElement;
   let cy: cytoscape.Core | undefined;
   const [data, setData] = createSignal<ProvGraphResponse | null>(null);
   const [error, setError] = createSignal<string | null>(null);
-  const [hidden, setHidden] = createSignal<Set<string>>(new Set());
+  const [loading, setLoading] = createSignal(false);
   const [ptype, setPtype] = createSignal("");
   const [picked, setPicked] = createSignal<string[]>([]);
   const [detail, setDetail] = createSignal<Record<string, string> | null>(null);
   const [sel, setSel] = createSignal<Selection | null>(null);
-  const [showFiles, setShowFiles] = createSignal(true);
-  const [showMounts, setShowMounts] = createSignal(true);
-  const [ioMode, setIoMode] = createSignal<IoMode>("any");
-  const [ops, setOps] = createSignal<Set<string>>(new Set(["read", "write", "delete"]));
   // View scope: when non-empty, only these entities and their neighborhood are drawn.
-  const [viewIds, setViewIds] = createSignal<string[]>([]);
-  const [viewDraft, setViewDraft] = createSignal<string[]>([]);
-  const [viewMode, setViewMode] = createSignal<"direct" | "lineage">("direct");
-  const entitiesByType = createMemo(() => {
-    const d = data();
-    if (!d) return [] as { type: string; items: { hash: string; id: string }[] }[];
-    const m = new Map<string, { hash: string; id: string }[]>();
-    for (const e of d.entities) {
-      if (!m.has(e.type)) m.set(e.type, []);
-      m.get(e.type)!.push({ hash: e.hash, id: entityLabel(e) });
-    }
-    return [...m.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([type, items]) => ({ type, items: items.sort((a, b) => a.id.localeCompare(b.id)) }));
-  });
   const ctrl = new AbortController();
   onCleanup(() => {
     ctrl.abort();
@@ -207,12 +120,6 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string })
         (a, b) => (ROLE_ORDER[a.role] ?? 3) - (ROLE_ORDER[b.role] ?? 3) || a.t.localeCompare(b.t),
       );
   });
-  const ROLE_LABEL: Record<string, string> = {
-    input: "Inputs",
-    intermediate: "Intermediates",
-    output: "Outputs",
-  };
-  const rolesPresent = createMemo(() => [...new Set(types().map((t) => t.role))]);
   const colorOf = createMemo(() => new Map(types().map((x) => [x.t, x.c])));
   const idsOfType = createMemo((): { hash: string; id: string }[] => {
     const d = data();
@@ -340,10 +247,6 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string })
           "text-max-width": "180px",
         },
       },
-      {
-        selector: 'edge[kind="io"]',
-        style: { "line-color": "data(color)", "target-arrow-color": "data(color)", width: 1.3 },
-      },
       { selector: 'edge[op="open"], edge[op="meta"]', style: { "line-style": "dotted" } },
       {
         selector: 'edge[kind="ioagg"]',
@@ -371,7 +274,6 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string })
         },
       },
       { selector: "node[?unreg]", style: { "background-color": css("--danger") || "#d1524e" } },
-      { selector: ".gone", style: { display: "none" } },
       { selector: ".faded", style: { opacity: 0.08 } },
       { selector: "node.up", style: { "border-width": 3, "border-color": "#4e9fd6", opacity: 1 } },
       {
@@ -507,7 +409,7 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string })
       });
       els.push({ data: { source: fileId(f.path), target: "M:" + f.mount, rel: "on" } });
     }
-    els.push(...ioEdges(d, ioMode()));
+    els.push(...ioEdges(d));
     // entity -> entity relations (ER records): contains, derived_from, ...
     for (const r of d.entity_relations ?? []) {
       addUnknown(r.subject);
@@ -628,77 +530,11 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string })
   function filesOf(c: cytoscape.CollectionReturnValue) {
     const acts = c.nodes('[kind="activity"]');
     const ents = c.nodes('[kind="entity"]');
-    const ioE = acts.connectedEdges('[kind="io"], [kind="ioagg"]');
+    const ioE = acts.connectedEdges('[kind="ioagg"]');
     const stE = ents.outgoers('edge[rel="stored_in"]');
     const files = ioE.connectedNodes('[kind="file"]').union(stE.targets());
     const onE = files.outgoers('edge[rel="on"]');
     return files.union(ioE).union(stE).union(onE).union(onE.targets());
-  }
-
-  function swapIoEdges() {
-    const d = data();
-    if (!cy || !d) return;
-    cy.batch(() => {
-      cy!.remove('edge[kind="io"], edge[kind="ioagg"]');
-      cy!.add(ioEdges(d, ioMode()));
-    });
-  }
-
-  // Node ids drawn for the current view selection, or null for "everything".
-  function viewScope(): Set<string> | null {
-    if (!cy || !viewIds().length) return null;
-    const sel = cy.collection(viewIds().map((h) => cy!.getElementById(h)));
-    let keep: cytoscape.CollectionReturnValue;
-    if (viewMode() === "lineage") {
-      keep = sel.union(provWalk(sel, true)).union(provWalk(sel, false));
-      keep = keep.union(filesOf(keep));
-    } else {
-      // selected entities, the activities and files they touch, and those
-      // activities' other inputs/outputs
-      const near = sel.closedNeighborhood();
-      keep = near.union(near.nodes('[kind="activity"]').neighborhood());
-    }
-    // storage of every file shown
-    keep = keep.union(keep.nodes('[kind="file"]').outgoers('node[kind="mount"]'));
-    return new Set(keep.nodes().map((n) => n.id()));
-  }
-
-  function applyTypeFilter() {
-    if (!cy) return;
-    const h = hidden();
-    const scope = viewScope();
-    const out = (n: cytoscape.NodeSingular) => scope !== null && !scope.has(n.id());
-    cy.batch(() => {
-      cy!.nodes('[kind="entity"]').forEach((n) => {
-        n.toggleClass("gone", out(n) || h.has(n.data("etype")));
-      });
-      // only the active mode's I/O edges exist; per-op toggles in "separate"
-      cy!.edges('[kind="io"]').forEach((e) => {
-        e.toggleClass("gone", !ops().has(e.data("op")));
-      });
-      cy!.nodes('[kind="file"]').forEach((n) => {
-        const visibleIo = n
-          .connectedEdges('[kind="io"], [kind="ioagg"]')
-          .filter((e) => !e.hasClass("gone")).length;
-        const viaEntity = n
-          .incomers('edge[rel="stored_in"]')
-          .sources()
-          .filter((m) => !m.hasClass("gone")).length;
-        n.toggleClass("gone", out(n) || !showFiles() || (!visibleIo && !viaEntity));
-      });
-      cy!.nodes('[kind="mount"]').forEach((n) => {
-        const any = n.incomers("node").filter((m) => !m.hasClass("gone")).length;
-        n.toggleClass("gone", out(n) || !showMounts() || !showFiles() || !any);
-      });
-      cy!.nodes('[kind="activity"]').forEach((n) => {
-        const any = n
-          .connectedEdges()
-          .connectedNodes()
-          .filter((m) => m.id() !== n.id() && !m.hasClass("gone")).length;
-        n.toggleClass("gone", out(n) || !any);
-      });
-    });
-    layout();
   }
 
   function clearTrace() {
@@ -709,9 +545,6 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string })
   function trace() {
     if (!cy) return;
     clearTrace();
-    setHidden(new Set<string>());
-    cy.elements().removeClass("gone");
-    applyTypeFilter(); // keep the file / storage / I/O-op toggles
     const p = cy.collection(picked().map((h) => cy!.getElementById(h)));
     const upP = provWalk(p, true);
     const downP = provWalk(p, false);
@@ -818,18 +651,34 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string })
     keys.clear();
   });
 
-  onMount(async () => {
+  async function loadGraph() {
+    setLoading(true);
     try {
       const d = await fetchProvGraph({}, props.scope, ctrl.signal);
+      clearTrace();
+      setPicked([]);
+      setPtype("");
+      cy?.destroy();
+      cy = undefined;
       setData(d);
       if (d.entities.length || d.activities.length) {
         build(d);
-        applyTypeFilter(); // apply the default I/O-op filter (hides open/stat)
       }
     } catch (e) {
       if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
-  });
+  }
+  onMount(loadGraph);
+  // This view is for tracing, so new data waits here for the user rather than moving the graph under them.
+  const newRecords = () => {
+    const d = data();
+    const l = props.live.data();
+    return d && l
+      ? l.activities.length - d.activities.length + (l.entities.length - d.entities.length)
+      : 0;
+  };
   // Re-read the theme tokens when the app's dark/light mode flips.
   createEffect(
     on(
@@ -885,108 +734,6 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string })
                   <p class="muted">
                     No provenance records in this trace. Record them with dftracer_prov
                     (DFT_PROV_ACTIVITY / prov.activity) and run with DFTRACER_INC_METADATA=1.
-                  </p>
-                </Show>
-              </section>
-              <section class="prov-trace prov-view">
-                <h3>View</h3>
-                <label for="prov-view">Entities to show</label>
-                <select
-                  id="prov-view"
-                  multiple
-                  size={10}
-                  onChange={(e) =>
-                    setViewDraft([...e.currentTarget.selectedOptions].map((o) => o.value))
-                  }
-                >
-                  <For each={entitiesByType()}>
-                    {(g) => (
-                      <optgroup
-                        label={`${typeInfo().get(g.type)?.role ?? "?"} · ${g.type} (${g.items.length})`}
-                      >
-                        <For each={g.items}>
-                          {(it) => (
-                            <option value={it.hash} selected={viewDraft().includes(it.hash)}>
-                              {it.id}
-                            </option>
-                          )}
-                        </For>
-                      </optgroup>
-                    )}
-                  </For>
-                </select>
-                <div class="prov-row">
-                  <For each={rolesPresent().filter((r) => ROLE_LABEL[r])}>
-                    {(role) => (
-                      <button
-                        type="button"
-                        title={`Select every ${role} entity`}
-                        onClick={() =>
-                          setViewDraft(
-                            (data()?.entities ?? [])
-                              .filter((e) => typeInfo().get(e.type)?.role === role)
-                              .map((e) => e.hash),
-                          )
-                        }
-                      >
-                        All {ROLE_LABEL[role].toLowerCase()}
-                      </button>
-                    )}
-                  </For>
-                </div>
-                <div class="prov-radio" role="radiogroup" aria-label="View scope">
-                  <label>
-                    <input
-                      type="radio"
-                      name="prov-view-mode"
-                      checked={viewMode() === "direct"}
-                      onChange={() => setViewMode("direct")}
-                    />
-                    selected + direct links
-                  </label>
-                  <label>
-                    <input
-                      type="radio"
-                      name="prov-view-mode"
-                      checked={viewMode() === "lineage"}
-                      onChange={() => setViewMode("lineage")}
-                    />
-                    selected + full lineage &amp; impact
-                  </label>
-                </div>
-                <div class="prov-row">
-                  <button
-                    type="button"
-                    class="primary"
-                    disabled={!viewDraft().length}
-                    onClick={() => {
-                      clearTrace();
-                      setViewIds(viewDraft());
-                      applyTypeFilter();
-                    }}
-                  >
-                    Show selected ({viewDraft().length})
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!viewIds().length}
-                    onClick={() => {
-                      clearTrace();
-                      setViewIds([]);
-                      setViewDraft([]);
-                      applyTypeFilter();
-                    }}
-                  >
-                    Show all
-                  </button>
-                </div>
-                <Show when={viewIds().length}>
-                  <p class="muted">
-                    Showing {viewIds().length} selected{" "}
-                    {viewMode() === "lineage"
-                      ? "with full lineage and impact"
-                      : "with direct links"}
-                    . Ctrl/⌘-click or Shift-click to pick several.
                   </p>
                 </Show>
               </section>
@@ -1115,128 +862,19 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string })
                   )}
                 </Show>
               </section>
-              <Show when={(d().files ?? []).length}>
-                <section>
-                  <h3>Files and storage</h3>
-                  <label class="prov-type">
-                    <input
-                      type="checkbox"
-                      checked={showFiles()}
-                      onChange={(e) => {
-                        setShowFiles(e.currentTarget.checked);
-                        applyTypeFilter();
-                      }}
-                    />
-                    <span class="sw sq" style={{ background: FILE_COLOR }} />
-                    <span class="nm">files (path from mount)</span>
-                    <span class="ct">{d().files!.length}</span>
-                  </label>
-                  <label class="prov-type">
-                    <input
-                      type="checkbox"
-                      checked={showMounts()}
-                      onChange={(e) => {
-                        setShowMounts(e.currentTarget.checked);
-                        applyTypeFilter();
-                      }}
-                    />
-                    <span class="sw" style={{ background: MOUNT_COLOR }} />
-                    <span class="nm">storage (mount point)</span>
-                    <span class="ct">{(d().mounts ?? []).length}</span>
-                  </label>
-                  <div class="prov-sub">Activity ↔ file links</div>
-                  <div class="prov-radio" role="radiogroup" aria-label="Activity to file links">
-                    <For each={IO_MODES}>
-                      {([m, label]) => (
-                        <label>
-                          <input
-                            type="radio"
-                            name="prov-io-mode"
-                            checked={ioMode() === m}
-                            onChange={() => {
-                              setIoMode(m);
-                              swapIoEdges();
-                              applyTypeFilter();
-                            }}
-                          />
-                          {label}
-                        </label>
-                      )}
-                    </For>
-                  </div>
-                  <div class="prov-keys">
-                    <span>
-                      <i class="k" style={{ background: "#3fb5a8" }} />
-                      read: file → activity
-                    </span>
-                    <span>
-                      <i class="k" style={{ background: "#e6a13c" }} />
-                      write: activity → file
-                    </span>
-                    <span>
-                      <i class="k meta" />
-                      metadata: file → activity (dotted)
-                    </span>
-                  </div>
-                  <For each={ioMode() === "separate" ? IO_OPS : []}>
-                    {([op, label, c]) => (
-                      <label class="prov-type prov-indent">
-                        <input
-                          type="checkbox"
-                          checked={ops().has(op)}
-                          onChange={(e) => {
-                            const o = new Set(ops());
-                            if (e.currentTarget.checked) o.add(op);
-                            else o.delete(op);
-                            setOps(o);
-                            applyTypeFilter();
-                          }}
-                        />
-                        <span class="sw ln" style={{ background: c }} />
-                        <span class="nm">{label}</span>
-                        <span class="ct">
-                          {(d().accesses ?? []).filter((x) => x.op === op).length}
-                        </span>
-                      </label>
-                    )}
-                  </For>
-                </section>
-              </Show>
-              <section>
-                <h3>Entity types</h3>
-                <For each={rolesPresent()}>
-                  {(role) => (
-                    <>
-                      <div class="prov-sub">{ROLE_LABEL[role] ?? "Undescribed"}</div>
-                      <For each={types().filter((x) => x.role === role)}>
-                        {(t) => (
-                          <label class="prov-type" title={t.desc || "no description recorded"}>
-                            <input
-                              type="checkbox"
-                              checked={!hidden().has(t.t)}
-                              onChange={(e) => {
-                                const h = new Set(hidden());
-                                if (e.currentTarget.checked) h.delete(t.t);
-                                else h.add(t.t);
-                                setHidden(h);
-                                applyTypeFilter();
-                              }}
-                            />
-                            <span class="sw" style={{ background: t.c }} />
-                            <span class="nm">{t.t}</span>
-                            <span class="ct">{t.n}</span>
-                          </label>
-                        )}
-                      </For>
-                    </>
-                  )}
-                </For>
-              </section>
             </>
           )}
         </Show>
       </aside>
       <div class="prov-canvas">
+        <Show when={newRecords() > 0}>
+          <div class="prov-stale">
+            {newRecords().toLocaleString()} new records since this graph was drawn
+            <button type="button" disabled={loading()} onClick={() => void loadGraph()}>
+              {loading() ? "Loading…" : "Refresh"}
+            </button>
+          </div>
+        </Show>
         <div ref={host} class="prov-cy" role="img" aria-label="Provenance graph" />
         <Show when={detail()}>
           {(d) => (

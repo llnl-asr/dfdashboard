@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { ProvActivity, ProvEntity, ProvGraphResponse } from "../data/api";
-import { entityNode, FLOW, moreNode, typeGraph, typeNode, UNTYPED, view } from "./typegraph";
+import {
+  behaviors,
+  CREATED_BINS,
+  entityNode,
+  FLOW,
+  moreNode,
+  overview,
+  typeGraph,
+  typeNode,
+  UNTYPED,
+  view,
+} from "./typegraph";
 
 const ent = (hash: string, type: string, uri = ""): ProvEntity => ({
   hash,
@@ -168,5 +179,101 @@ describe("expanding a type", () => {
     });
     const total = (x: typeof v) => x.edges.reduce((s, e) => s + e.links, 0);
     expect(total(v)).toBe(total(view(g, new Set(), all)));
+  });
+});
+
+describe("behaviors", () => {
+  it("says what held every time an activity ran", () => {
+    const b = behaviors(typeGraph(trace), trace.activities).find((x) => x.name === "predict")!;
+    expect(b).toMatchObject({
+      count: 2,
+      always: { uses: ["msa"], makes: ["model"] },
+      sometimes: { uses: [], makes: [] },
+    });
+  });
+
+  it("keeps what only held some of the time apart, with how often", () => {
+    const d = graph({
+      entities: [ent("a", "x"), ent("b", "y"), ent("o", "z")],
+      activities: [act("p", ["a"], ["o"]), act("p", ["a", "b"], ["o"])],
+    });
+    expect(behaviors(typeGraph(d), d.activities)[0]).toMatchObject({
+      always: { uses: ["x"] },
+      sometimes: { uses: [["y", 1]] },
+    });
+  });
+
+  it("orders the most frequent activity first", () => {
+    expect(behaviors(typeGraph(trace), trace.activities).map((b) => b.name)).toEqual([
+      "predict",
+      "relax",
+      "save",
+    ]);
+  });
+});
+
+describe("overview", () => {
+  const timed = (name: string, ts: number, dur: number, used: string[], generated: string[]) => ({
+    ...act(name, used, generated),
+    ts,
+    dur,
+    pid: ts < 5 ? 1 : 2,
+  });
+  const d = graph({
+    entities: [
+      { ...ent("a", "msa"), store: "parallel_fs" },
+      { ...ent("b", "model"), store: "memory" },
+      { ...ent("c", "tar"), store: "memory" },
+      ent("z", "tar"),
+    ],
+    activities: [timed("predict", 0, 4, ["a"], ["b"]), timed("save", 5, 5, ["b", "a"], ["c"])],
+    types: [{ name: "msa", role: "input", description: "" }],
+  });
+  const o = overview(typeGraph(d), d);
+
+  it("counts roots, leaves, processes and the longest chain", () => {
+    expect(o).toMatchObject({
+      processes: 2,
+      activityKinds: 2,
+      roots: 2,
+      leaves: 2,
+      depth: 2,
+      span: 10,
+    });
+  });
+
+  it("tallies entities by type, store and role, the largest first", () => {
+    expect(o.byType[0]).toEqual(["tar", 2]);
+    expect(o.byStore).toEqual([
+      ["memory", 2],
+      ["parallel_fs", 1],
+      ["unknown", 1],
+    ]);
+    expect(o.byRole).toEqual([
+      ["undescribed", 3],
+      ["input", 1],
+    ]);
+  });
+
+  it("says where activity time goes", () => {
+    expect(o.activityTime).toEqual([
+      ["save", 5],
+      ["predict", 4],
+    ]);
+  });
+
+  it("bins how many activities used each entity", () => {
+    expect(Object.fromEntries(o.reuse)).toMatchObject({ "0": 2, "1": 1, "2": 1 });
+  });
+
+  it("places each made entity once on the run's clock", () => {
+    expect(o.created).toHaveLength(CREATED_BINS);
+    expect(o.created.reduce((s, n) => s + n, 0)).toBe(2);
+    expect(o.created[CREATED_BINS - 1]).toBe(1);
+  });
+
+  it("handles a trace with no activities", () => {
+    const e = graph({ entities: [ent("a", "x")] });
+    expect(overview(typeGraph(e), e)).toMatchObject({ depth: 0, span: 0, roots: 1, leaves: 1 });
   });
 });
