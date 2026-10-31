@@ -77,6 +77,8 @@ test("the timeline and the other views render without errors", async ({ page }) 
     await expect(page.locator("nav.leftnav")).toHaveClass(/leftnav/);
     await expect(page).toHaveURL(new RegExp(`view=${view}`));
   }
+  // The list renders after the spec loads; asserting sooner misses its errors.
+  await expect(page.locator(".api-ep").first()).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -175,7 +177,7 @@ test("the entry bundle stays small and the heavy view loads on demand", async ({
   // The synthetic trace has no provenance records, so the view shows its empty
   // state; what matters here is that the chunk arrived and the view mounted.
   await page.locator('nav.leftnav a[href*="view=provenance"]').first().click();
-  await expect(page.locator(".pt")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".prov")).toBeVisible({ timeout: 30_000 });
   const chunks = await page.evaluate(() =>
     performance.getEntriesByType("resource").map((e) => e.name.split("/").pop() ?? ""),
   );

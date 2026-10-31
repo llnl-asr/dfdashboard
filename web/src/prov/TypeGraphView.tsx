@@ -12,8 +12,20 @@ import {
   onMount,
   Show,
 } from "solid-js";
-import { fetchProvGraph, type ProvEntity, type ProvGraphResponse } from "../data/api";
-import { FLOW, type TypeGraph, typeGraph, type VEdge, view } from "./typegraph";
+import type { ProvEntity } from "../data/api";
+import type { LiveProv } from "./live";
+import {
+  behaviors,
+  FLOW,
+  overview,
+  type Tally,
+  type TypeGraph,
+  typeGraph,
+  type TypeView,
+  type VEdge,
+  type VNode,
+  view,
+} from "./typegraph";
 import "./prov.css";
 
 cytoscape.use(dagre);
@@ -30,16 +42,69 @@ const nodeSize = (n: number) =>
   Math.min(MAX_NODE, MIN_NODE + NODE_PER_LOG * Math.log10(Math.max(n, 1)));
 const edgeWidth = (n: number) => Math.min(MAX_EDGE, 1 + Math.log10(Math.max(n, 1)));
 
+const fmtTime = (us: number) =>
+  us >= 60e6
+    ? `${(us / 60e6).toFixed(1)} min`
+    : us >= 1e6
+      ? `${(us / 1e6).toFixed(1)} s`
+      : `${(us / 1e3).toFixed(0)} ms`;
+const BAR_ROWS = 10;
+
+function Bars(props: { title: string; rows: Tally; fmt?: (n: number) => string }) {
+  const top = () => Math.max(...props.rows.map((r) => r[1]), 1);
+  return (
+    <figure class="prov-chart">
+      <figcaption>{props.title}</figcaption>
+      <For each={props.rows.slice(0, BAR_ROWS)}>
+        {([name, n]) => (
+          <div class="bar" title={`${name}: ${n}`}>
+            <span class="nm">{name}</span>
+            <span class="tr">
+              <i style={{ width: `${(n / top()) * 100}%` }} />
+            </span>
+            <span class="ct">{props.fmt ? props.fmt(n) : n.toLocaleString()}</span>
+          </div>
+        )}
+      </For>
+      <Show when={props.rows.length > BAR_ROWS}>
+        <div class="more">{props.rows.length - BAR_ROWS} more</div>
+      </Show>
+    </figure>
+  );
+}
+
+function Columns(props: { title: string; note: string; rows: Tally }) {
+  const top = () => Math.max(...props.rows.map((r) => r[1]), 1);
+  return (
+    <figure class="prov-chart">
+      <figcaption>{props.title}</figcaption>
+      <div class="cols">
+        <For each={props.rows}>
+          {([name, n]) => (
+            <span class="col" title={`${name}: ${n}`}>
+              <i style={{ height: `${(n / top()) * 100}%` }} />
+            </span>
+          )}
+        </For>
+      </div>
+      <div class="more">{props.note}</div>
+    </figure>
+  );
+}
+
+const nodeText = (n: VNode) =>
+  n.kind === "type" || n.kind === "group" ? `${n.label}\n${n.count.toLocaleString()}` : n.label;
+
 type Picked =
   | { kind: "type"; name: string }
   | { kind: "edge"; edge: VEdge }
   | { kind: "entity"; entity: ProvEntity };
 
-export function TypeGraphView(props: { mode: "dark" | "light"; scope: string }) {
+export function TypeGraphView(props: { mode: "dark" | "light"; live: LiveProv }) {
   let host!: HTMLDivElement;
   let cy: cytoscape.Core | undefined;
-  const [data, setData] = createSignal<ProvGraphResponse | null>(null);
-  const [error, setError] = createSignal<string | null>(null);
+  let drawn = "";
+  const data = () => props.live.data();
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set());
   const [limits, setLimits] = createSignal<Map<string, number>>(new Map());
   const [picked, setPicked] = createSignal<Picked | null>(null);
@@ -48,6 +113,16 @@ export function TypeGraphView(props: { mode: "dark" | "light"; scope: string }) 
   const graph = createMemo<TypeGraph | null>(() => {
     const d = data();
     return d ? typeGraph(d) : null;
+  });
+  const seenBehaviors = createMemo(() => {
+    const g = graph();
+    const d = data();
+    return g && d ? behaviors(g, d.activities) : [];
+  });
+  const numbers = createMemo(() => {
+    const g = graph();
+    const d = data();
+    return g && d ? overview(g, d) : null;
   });
   const rows = createMemo(() =>
     [...(graph()?.types.values() ?? [])].sort(
@@ -213,12 +288,28 @@ export function TypeGraphView(props: { mode: "dark" | "light"; scope: string }) 
     near.edges().addClass("named");
   }
 
+  /** New counts keep the picture where it is; only a new type or relationship moves things. */
+  function refresh(v: TypeView): boolean {
+    if (!cy) return false;
+    const shape = [...v.nodes.map((n) => n.id), ...v.edges.map((e) => e.id)].sort().join("\0");
+    if (shape !== drawn) {
+      drawn = shape;
+      return false;
+    }
+    cy.batch(() => {
+      for (const n of v.nodes)
+        cy!.getElementById(n.id).data({ text: nodeText(n), size: nodeSize(n.count) });
+      for (const e of v.edges)
+        cy!.getElementById(e.id).data({ label: e.label, width: edgeWidth(e.links) });
+    });
+    return true;
+  }
+
   function draw() {
     const v = current();
     const g = graph();
-    if (!v || !g) return;
+    if (!v || !g || refresh(v)) return;
     cy?.destroy();
-    const edges = new Map(v.edges.map((e) => [e.id, e]));
     cy = cytoscape({
       container: host,
       style: style(),
@@ -232,10 +323,7 @@ export function TypeGraphView(props: { mode: "dark" | "light"; scope: string }) 
             type: n.type,
             color: g.types.get(n.type)!.color,
             size: nodeSize(n.count),
-            text:
-              n.kind === "type" || n.kind === "group"
-                ? `${n.label}\n${n.count.toLocaleString()}`
-                : n.label,
+            text: nodeText(n),
           },
         })),
         ...v.edges.map((e) => ({
@@ -267,7 +355,7 @@ export function TypeGraphView(props: { mode: "dark" | "light"; scope: string }) 
     cy.on("mouseout", "node, edge", () => focus());
     cy.on("select unselect", () => focus());
     cy.on("tap", "node", (ev) => {
-      const n = v.nodes.find((x) => x.id === ev.target.id())!;
+      const n = current()!.nodes.find((x) => x.id === ev.target.id())!;
       if (n.kind === "more") {
         setLimits(
           new Map(limits()).set(n.type, (limits().get(n.type) ?? INSTANCE_STEP) + INSTANCE_STEP),
@@ -276,7 +364,9 @@ export function TypeGraphView(props: { mode: "dark" | "light"; scope: string }) 
         setPicked(n.entity ? { kind: "entity", entity: n.entity } : { kind: "type", name: n.type });
       }
     });
-    cy.on("tap", "edge", (ev) => setPicked({ kind: "edge", edge: edges.get(ev.target.id())! }));
+    cy.on("tap", "edge", (ev) =>
+      setPicked({ kind: "edge", edge: current()!.edges.find((e) => e.id === ev.target.id())! }),
+    );
     cy.on("dbltap", 'node[kind="type"], node[kind="group"]', (ev) =>
       toggle(ev.target.data("type")),
     );
@@ -288,19 +378,11 @@ export function TypeGraphView(props: { mode: "dark" | "light"; scope: string }) 
   onMount(() => {
     createEffect(
       on(
-        () => props.scope,
-        (scope) => {
-          const ctl = new AbortController();
-          setData(null);
-          setError(null);
+        () => data() === null,
+        (waiting) => {
+          if (!waiting) return;
           setExpanded(new Set<string>());
           setPicked(null);
-          fetchProvGraph({ io: false }, scope, ctl.signal)
-            .then(setData)
-            .catch((e: Error) => {
-              if (e.name !== "AbortError") setError(e.message);
-            });
-          onCleanup(() => ctl.abort());
         },
       ),
     );
@@ -325,163 +407,213 @@ export function TypeGraphView(props: { mode: "dark" | "light"; scope: string }) 
   return (
     <div class="prov">
       <aside class="prov-rail">
-        <Show when={error()}>
-          <div class="prov-error">Could not load the provenance graph: {error()}</div>
-        </Show>
-        <Show when={!data() && !error()}>
+        <Show when={!data()}>
           <div class="muted">Scanning trace for provenance records…</div>
         </Show>
         <Show when={data()}>
-          {(d) => (
-            <>
-              <section>
-                <h3>Trace</h3>
-                <dl class="prov-stats">
-                  <dt>entity types</dt>
-                  <dd>{rows().length}</dd>
-                  <dt>entities</dt>
-                  <dd>{d().entities.length.toLocaleString()}</dd>
-                  <dt>activities</dt>
-                  <dd>{d().activities.length.toLocaleString()}</dd>
-                  <dt>links</dt>
-                  <dd>{(graph()?.links.length ?? 0).toLocaleString()}</dd>
-                  <Show when={graph()?.dangling}>
-                    <dt>dangling hashes</dt>
-                    <dd class="bad">{graph()?.dangling}</dd>
-                  </Show>
-                </dl>
-              </section>
-              <section>
-                <h3>Show</h3>
-                <label class="prov-type">
+          <Show when={graph()?.dangling}>
+            <div class="prov-error">{graph()?.dangling} hashes have no entity record.</div>
+          </Show>
+          <section>
+            <h3>Show</h3>
+            <label class="prov-type">
+              <input
+                type="checkbox"
+                checked={relations()}
+                onChange={(e) => setRelations(e.currentTarget.checked)}
+              />
+              entity relations
+            </label>
+            <label class="prov-type">
+              <input
+                type="checkbox"
+                checked={names()}
+                onChange={(e) => setNames(e.currentTarget.checked)}
+              />
+              activity names
+            </label>
+            <div class="prov-row">
+              <button onClick={() => setExpanded(new Set<string>())} disabled={!expanded().size}>
+                Collapse all
+              </button>
+            </div>
+          </section>
+          <section>
+            <h3>What each activity does</h3>
+            <For each={seenBehaviors()}>
+              {(b) => {
+                const some = [...b.sometimes.uses, ...b.sometimes.makes];
+                return (
+                  <div class="prov-beh">
+                    <b>{b.name}</b> ×{b.count}
+                    <Show when={b.always.uses.length}>
+                      <div class="sub">always uses {b.always.uses.join(", ")}</div>
+                    </Show>
+                    <Show when={b.always.makes.length}>
+                      <div class="sub">always makes {b.always.makes.join(", ")}</div>
+                    </Show>
+                    <Show when={some.length}>
+                      <div class="sub">
+                        sometimes {some.map(([t, n]) => `${t} ${n}/${b.count}`).join(", ")}
+                      </div>
+                    </Show>
+                  </div>
+                );
+              }}
+            </For>
+          </section>
+          <section>
+            <h3>Expand a type</h3>
+            <For each={rows()}>
+              {(t) => (
+                <label class="prov-type" title={t.description || "no description recorded"}>
                   <input
                     type="checkbox"
-                    checked={relations()}
-                    onChange={(e) => setRelations(e.currentTarget.checked)}
+                    checked={expanded().has(t.name)}
+                    onChange={() => toggle(t.name)}
                   />
-                  entity relations
+                  <span class="sw" style={{ background: t.color }} />
+                  <span>{t.name}</span>
+                  <span class="ct">{t.instances.length}</span>
                 </label>
-                <label class="prov-type">
-                  <input
-                    type="checkbox"
-                    checked={names()}
-                    onChange={(e) => setNames(e.currentTarget.checked)}
-                  />
-                  activity names
-                </label>
-                <div class="prov-row">
-                  <button
-                    onClick={() => setExpanded(new Set<string>())}
-                    disabled={!expanded().size}
-                  >
-                    Collapse all
-                  </button>
-                </div>
-              </section>
-              <section>
-                <h3>Expand a type</h3>
-                <For each={rows()}>
-                  {(t) => (
-                    <label class="prov-type" title={t.description || "no description recorded"}>
-                      <input
-                        type="checkbox"
-                        checked={expanded().has(t.name)}
-                        onChange={() => toggle(t.name)}
-                      />
-                      <span class="sw" style={{ background: t.color }} />
-                      <span>{t.name}</span>
-                      <span class="ct">{t.instances.length}</span>
-                    </label>
-                  )}
-                </For>
-              </section>
-            </>
-          )}
+              )}
+            </For>
+          </section>
         </Show>
       </aside>
-      <div class="prov-canvas">
-        <div
-          ref={host}
-          class="prov-cy"
-          role="img"
-          aria-label="Relationships between entity types"
-        />
-        <Show when={picked()}>
-          {(p) => (
-            <div class="prov-detail">
-              <Show when={typeOf()}>
-                {(t) => (
-                  <>
-                    <b>{t().name}</b>
-                    <div class="muted">
-                      {t().role || "no role"} · {t().instances.length} instances
-                    </div>
-                    <Show when={t().description}>
-                      <p>{t().description}</p>
-                    </Show>
-                    <Show when={related(t().name, "source").length}>
-                      <h4>Made from</h4>
-                      <For each={related(t().name, "source")}>
-                        {([n, c]) => (
-                          <div>
-                            {n} ({c})
-                          </div>
-                        )}
-                      </For>
-                    </Show>
-                    <Show when={related(t().name, "target").length}>
-                      <h4>Feeds</h4>
-                      <For each={related(t().name, "target")}>
-                        {([n, c]) => (
-                          <div>
-                            {n} ({c})
-                          </div>
-                        )}
-                      </For>
-                    </Show>
-                    <button onClick={() => toggle(t().name)}>
-                      {expanded().has(t().name) ? "Collapse" : "Expand instances"}
-                    </button>
-                  </>
+      <div class="prov-beh-main">
+        <Show when={numbers()}>
+          {(n) => (
+            <div class="prov-tiles">
+              <For
+                each={
+                  [
+                    ["entity types", rows().length],
+                    ["entities", data()!.entities.length],
+                    ["activities", data()!.activities.length],
+                    ["kinds of activity", n().activityKinds],
+                    ["processes", n().processes],
+                    ["longest chain", n().depth],
+                    ["root entities", n().roots],
+                    ["never used", n().leaves],
+                  ] as [string, number][]
+                }
+              >
+                {([label, value]) => (
+                  <div class="tile">
+                    <b>{value.toLocaleString()}</b>
+                    <span>{label}</span>
+                  </div>
                 )}
-              </Show>
-              <Show when={p().kind === "edge" && (p() as { edge: VEdge }).edge}>
-                {(e) => (
-                  <>
-                    <b>
-                      {edgeName(e().source)} → {edgeName(e().target)}
-                    </b>
-                    <div class="muted">
-                      {e().kind === FLOW ? "data flow" : e().kind} · {e().links} instance links
-                    </div>
-                    <For each={e().via}>
-                      {([n, c]) => (
-                        <div>
-                          {n} ({c})
-                        </div>
-                      )}
-                    </For>
-                  </>
-                )}
-              </Show>
-              <Show when={p().kind === "entity" && (p() as { entity: ProvEntity }).entity}>
-                {(x) => (
-                  <>
-                    <b>{x().type}</b>
-                    <div class="muted">{x().id}</div>
-                    <div>{x().uri || "no uri"}</div>
-                    <div class="muted">{x().store}</div>
-                  </>
-                )}
-              </Show>
+              </For>
             </div>
           )}
         </Show>
-        <div class="prov-hint">
-          {data() && !data()!.entities.length
-            ? "This trace has no provenance entities."
-            : "Double-click a type to expand its instances. Point at a type or edge to follow it; click for details."}
+        <div class="prov-canvas">
+          <div
+            ref={host}
+            class="prov-cy"
+            role="img"
+            aria-label="Relationships between entity types"
+          />
+          <Show when={picked()}>
+            {(p) => (
+              <div class="prov-detail">
+                <Show when={typeOf()}>
+                  {(t) => (
+                    <>
+                      <b>{t().name}</b>
+                      <div class="muted">
+                        {t().role || "no role"} · {t().instances.length} instances
+                      </div>
+                      <Show when={t().description}>
+                        <p>{t().description}</p>
+                      </Show>
+                      <Show when={related(t().name, "source").length}>
+                        <h4>Made from</h4>
+                        <For each={related(t().name, "source")}>
+                          {([n, c]) => (
+                            <div>
+                              {n} ({c})
+                            </div>
+                          )}
+                        </For>
+                      </Show>
+                      <Show when={related(t().name, "target").length}>
+                        <h4>Feeds</h4>
+                        <For each={related(t().name, "target")}>
+                          {([n, c]) => (
+                            <div>
+                              {n} ({c})
+                            </div>
+                          )}
+                        </For>
+                      </Show>
+                      <button onClick={() => toggle(t().name)}>
+                        {expanded().has(t().name) ? "Collapse" : "Expand instances"}
+                      </button>
+                    </>
+                  )}
+                </Show>
+                <Show when={p().kind === "edge" && (p() as { edge: VEdge }).edge}>
+                  {(e) => (
+                    <>
+                      <b>
+                        {edgeName(e().source)} → {edgeName(e().target)}
+                      </b>
+                      <div class="muted">
+                        {e().kind === FLOW ? "data flow" : e().kind} · {e().links} instance links
+                      </div>
+                      <For each={e().via}>
+                        {([n, c]) => (
+                          <div>
+                            {n} ({c})
+                          </div>
+                        )}
+                      </For>
+                    </>
+                  )}
+                </Show>
+                <Show when={p().kind === "entity" && (p() as { entity: ProvEntity }).entity}>
+                  {(x) => (
+                    <>
+                      <b>{x().type}</b>
+                      <div class="muted">{x().id}</div>
+                      <div>{x().uri || "no uri"}</div>
+                      <div class="muted">{x().store}</div>
+                    </>
+                  )}
+                </Show>
+              </div>
+            )}
+          </Show>
+          <div class="prov-hint">
+            {data() && !data()!.entities.length
+              ? "This trace has no provenance entities."
+              : "Double-click a type to expand its instances. Point at a type or edge to follow it; click for details."}
+          </div>
         </div>
+        <Show when={numbers()}>
+          {(n) => (
+            <div class="prov-charts">
+              <Bars title="Entities by type" rows={n().byType} />
+              <Bars title="Entities by store" rows={n().byStore} />
+              <Bars title="Entities by role" rows={n().byRole} />
+              <Bars title="Runs of each activity" rows={n().activityRuns} />
+              <Bars title="Time in each activity" rows={n().activityTime} fmt={fmtTime} />
+              <Columns
+                title="How often an entity is used"
+                note="left to right: 0, 1, 2, 3-5, 6-20, 21+ uses"
+                rows={n().reuse}
+              />
+              <Columns
+                title="Entities made over the run"
+                note={`left to right across ${fmtTime(n().span)}`}
+                rows={n().created.map((c, i): [string, number] => [`slice ${i + 1}`, c])}
+              />
+            </div>
+          )}
+        </Show>
       </div>
     </div>
   );

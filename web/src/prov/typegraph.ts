@@ -3,7 +3,7 @@
 // Links are the instance-level facts: an activity that used a and generated b links a to b, and an
 // entity relation links its subject to its object. view() draws them at the level asked for: a
 // collapsed type stands for all its instances, an expanded one shows them, up to a limit per type.
-import type { ProvEntity, ProvGraphResponse } from "../data/api";
+import type { ProvActivity, ProvEntity, ProvGraphResponse } from "../data/api";
 
 // Categorical palette readable on both the dark and light themes.
 export const PALETTE = [
@@ -134,6 +134,136 @@ export function typeGraph(d: ProvGraphResponse): TypeGraph {
   }
   for (const r of d.entity_relations ?? []) add(r.subject, r.object, r.relation, r.relation);
   return { types, type, links, dangling: missing.size };
+}
+
+export interface Behavior {
+  name: string;
+  count: number;
+  always: { uses: string[]; makes: string[] };
+  sometimes: { uses: [string, number][]; makes: [string, number][] };
+}
+
+/** What each activity does with entity types, across every time it ran: a type in `always` was involved every time. */
+export function behaviors(g: TypeGraph, activities: ProvActivity[]): Behavior[] {
+  const groups = new Map<string, ProvActivity[]>();
+  for (const a of activities) {
+    if (!groups.has(a.name)) groups.set(a.name, []);
+    groups.get(a.name)!.push(a);
+  }
+  const split = (runs: ProvActivity[], hashes: (a: ProvActivity) => string[]) => {
+    const seen = new Map<string, number>();
+    for (const a of runs) {
+      const types = new Set(hashes(a).flatMap((h) => g.type.get(h) ?? []));
+      for (const t of types) seen.set(t, (seen.get(t) ?? 0) + 1);
+    }
+    const rows = [...seen.entries()].sort((x, y) => x[0].localeCompare(y[0]));
+    return {
+      always: rows.filter(([, n]) => n === runs.length).map(([t]) => t),
+      sometimes: rows.filter(([, n]) => n < runs.length),
+    };
+  };
+  return [...groups.entries()]
+    .map(([name, runs]) => {
+      const uses = split(runs, (a) => a.used);
+      const makes = split(runs, (a) => [...a.generated, ...(a.updated ?? [])]);
+      return {
+        name,
+        count: runs.length,
+        always: { uses: uses.always, makes: makes.always },
+        sometimes: { uses: uses.sometimes, makes: makes.sometimes },
+      };
+    })
+    .sort((x, y) => y.count - x.count || x.name.localeCompare(y.name));
+}
+
+export type Tally = [string, number][];
+
+export interface Overview {
+  processes: number;
+  activityKinds: number;
+  roots: number; // entities nothing in the trace made
+  leaves: number; // entities nothing in the trace used
+  depth: number; // activities on the longest chain from a root
+  byType: Tally;
+  byStore: Tally;
+  byRole: Tally;
+  activityRuns: Tally;
+  activityTime: Tally; // microseconds
+  reuse: Tally; // how many activities used each entity
+  created: number[]; // entities made in each slice of the run
+  span: number; // microseconds the run covers
+}
+
+const REUSE_BINS: [string, number, number][] = [
+  ["0", 0, 0],
+  ["1", 1, 1],
+  ["2", 2, 2],
+  ["3-5", 3, 5],
+  ["6-20", 6, 20],
+  ["21+", 21, Infinity],
+];
+export const CREATED_BINS = 24;
+
+const tally = (items: string[]): Tally => {
+  const m = new Map<string, number>();
+  for (const i of items) m.set(i, (m.get(i) ?? 0) + 1);
+  return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+};
+
+/** Longest chain of activities, each using what an earlier one made. */
+function chainDepth(activities: ProvActivity[]): number {
+  const sorted = activities.slice().sort((a, b) => a.ts - b.ts);
+  const reached = new Map<string, number>(); // entity -> activities on the longest chain that made it
+  let most = 0;
+  for (const a of sorted) {
+    const depth = Math.max(0, ...a.used.map((e) => reached.get(e) ?? 0)) + 1;
+    most = Math.max(most, depth);
+    for (const e of [...a.generated, ...(a.updated ?? [])])
+      reached.set(e, Math.max(reached.get(e) ?? 0, depth));
+  }
+  return most;
+}
+
+/** The numbers that describe a run's provenance, independent of any one instance. */
+export function overview(g: TypeGraph, d: ProvGraphResponse): Overview {
+  const made = new Map<string, number>();
+  const uses = new Map<string, number>();
+  const time = new Map<string, number>();
+  const a = d.activities;
+  const t0 = a.reduce((m, x) => Math.min(m, x.ts), a.length ? Infinity : 0);
+  const t1 = a.reduce((m, x) => Math.max(m, x.ts + x.dur), 0);
+  const span = t1 - t0;
+  for (const x of a) {
+    time.set(x.name, (time.get(x.name) ?? 0) + x.dur);
+    for (const e of x.generated) if (!made.has(e)) made.set(e, x.ts + x.dur);
+    for (const e of new Set(x.used)) uses.set(e, (uses.get(e) ?? 0) + 1);
+  }
+  const created = new Array<number>(CREATED_BINS).fill(0);
+  for (const t of made.values())
+    created[
+      Math.min(Math.floor(((t - t0) / Math.max(span, 1)) * CREATED_BINS), CREATED_BINS - 1)
+    ] += 1;
+  const counts = d.entities.map((e) => uses.get(e.hash) ?? 0);
+  return {
+    processes: new Set(a.map((x) => x.pid)).size,
+    activityKinds: time.size,
+    roots: d.entities.filter((e) => !made.has(e.hash)).length,
+    leaves: counts.filter((n) => n === 0).length,
+    depth: chainDepth(a),
+    byType: [...g.types.values()]
+      .map((t): [string, number] => [t.name, t.instances.length])
+      .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])),
+    byStore: tally(d.entities.map((e) => e.store || "unknown")),
+    byRole: tally(d.entities.map((e) => g.types.get(e.type || UNTYPED)?.role || "undescribed")),
+    activityRuns: tally(a.map((x) => x.name)),
+    activityTime: [...time.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0])),
+    reuse: REUSE_BINS.map(([label, lo, hi]) => [
+      label,
+      counts.filter((n) => n >= lo && n <= hi).length,
+    ]),
+    created,
+    span,
+  };
 }
 
 function edgeLabel(kind: string, via: [string, number][]): string {
