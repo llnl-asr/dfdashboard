@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 from ..trace import TraceData, trace_data
 from ..trace.frame import Row
 from . import fsnotify
+from .prov_stream import has_whole_member
 from .run_types import RunDict, Snapshot
 
 log = logging.getLogger(__name__)
@@ -135,6 +136,10 @@ def end_fingerprint(path: str) -> tuple[int, int]:
     return (count, events)
 
 
+class NoTraceYet(Exception):
+    """A run is listed, but none of its data can be read yet."""
+
+
 @dataclass(frozen=True)
 class TraceFile:
     path: str
@@ -199,7 +204,9 @@ def _list_dir(directory: str) -> tuple[list[str], list[str]]:
         with os.scandir(directory) as entries:
             for e in entries:
                 try:
-                    if e.is_dir(follow_symlinks=False):
+                    # A linked format dir is how a tree points at traces kept elsewhere;
+                    # following only those cannot loop.
+                    if e.is_dir(follow_symlinks=e.name in _FORMAT_DIRS):
                         if not e.name.startswith("."):
                             dirs.append(e.path)
                     elif e.name.endswith(".pfw.gz"):
@@ -653,7 +660,7 @@ class RunRegistry:
         with self._lock:
             if self._trace is None:
                 files = self.files()
-                if not files:
+                if not files or not all(has_whole_member(f) for f in files):
                     return None
                 runs = list(self._runs.values())
                 source = self._source(runs[0]) if len(runs) == 1 and runs else None
@@ -669,6 +676,8 @@ class RunRegistry:
             trace = self._traces.get(run_id)
             if trace is None:
                 run = self._runs[run_id]
+                if not all(has_whole_member(f.path) for f in run.files):
+                    raise NoTraceYet(run_id)
                 trace = trace_data(
                     [f.path for f in run.files],
                     index_dir=self.index_dir,

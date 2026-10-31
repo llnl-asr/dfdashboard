@@ -15,7 +15,7 @@ import { Rail, type TraceView } from "./ui/Rail";
 // The two views that carry heavy libraries (cytoscape, the analysis tables) are
 // split out: they load on the first visit, not when the trace boots.
 const ProvenanceView = lazy(() =>
-  import("./prov/ProvenanceView").then((m) => ({ default: m.ProvenanceView })),
+  import("./prov/ProvTab").then((m) => ({ default: m.ProvTab })),
 );
 const Analysis = lazy(() => import("./analysis/Analysis"));
 

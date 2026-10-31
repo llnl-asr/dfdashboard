@@ -175,9 +175,9 @@ test("the entry bundle stays small and the heavy view loads on demand", async ({
   // The synthetic trace has no provenance records, so the view shows its empty
   // state; what matters here is that the chunk arrived and the view mounted.
   await page.locator('nav.leftnav a[href*="view=provenance"]').first().click();
-  await expect(page.locator(".prov")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".pt")).toBeVisible({ timeout: 30_000 });
   const chunks = await page.evaluate(() =>
     performance.getEntriesByType("resource").map((e) => e.name.split("/").pop() ?? ""),
   );
-  expect(chunks.some((n) => n.startsWith("ProvenanceView-"))).toBe(true);
+  expect(chunks.some((n) => n.startsWith("ProvTab-"))).toBe(true);
 });

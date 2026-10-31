@@ -4,6 +4,7 @@
 // no server is running yet), plus the file/token and a vscode flag.
 export interface DftracerConfig {
   apiBase: string; // "" = same-origin (standalone server)
+  base: string; // path the app is served under behind a proxy, or ""
   file: string; // single-file scope, or ""
   token: string; // access token, or ""
   vscode: boolean; // running inside the VS Code webview
@@ -22,6 +23,7 @@ function read(): DftracerConfig {
   if (inj) {
     return {
       apiBase: inj.apiBase ?? "",
+      base: inj.base ?? "",
       file: inj.file ?? "",
       token: inj.token ?? "",
       vscode: !!inj.vscode,
@@ -31,6 +33,7 @@ function read(): DftracerConfig {
   const q = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
   return {
     apiBase: "",
+    base: "",
     file: q?.get("file") ?? "",
     token: q?.get("token") ?? "",
     vscode: false,
