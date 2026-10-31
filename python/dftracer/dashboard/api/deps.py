@@ -44,7 +44,9 @@ def get_trace(request: Request) -> TraceData:
             except KeyError as exc:
                 raise ApiError(404, NO_SUCH_RUN, f"no run: {run}") from exc
             except NoTraceYet as exc:
-                raise ApiError(503, NO_TRACE_YET, "no trace data yet, waiting for the first records") from exc
+                raise ApiError(
+                    503, NO_TRACE_YET, "no trace data yet, waiting for the first records"
+                ) from exc
         trace = cache[("run", run, "")]
     if trace is None:
         raise ApiError(503, NO_TRACE_YET, "no trace data yet, waiting for the first records")

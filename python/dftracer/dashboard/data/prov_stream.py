@@ -1,13 +1,17 @@
 """Provenance of traces that are still being written.
 
-``provenance.build`` reads through the dftracer-utils index, which needs a finished file: a trace with no complete
-gzip member yet is detected as a generic schema. A DFTracer service writes its node trace as a sequence of independent
-gzip members and seals one at least every flush interval, so this module reads the members directly. ``Tail`` commits its
-position only at the end of a whole member, because a member can be unfinished, or missing for a moment before a later one.
+``provenance.build`` reads through the dftracer-utils index, which needs a finished
+file: a trace with no complete gzip member yet is detected as a generic schema. A
+DFTracer service writes its node trace as a sequence of independent gzip members and
+seals one at least every flush interval, so this module reads the members directly.
+``Tail`` commits its position only at the end of a whole member, because a member can be
+unfinished, or missing for a moment before a later one.
 
-``ProvFeed`` folds records into the same graph shape as ``provenance.build`` and keeps a list of what each record added,
-which the API streams. An activity is written when it ends, so an I/O call usually arrives before the activity holding it: it
-waits, and inner activities, ending first, claim it first, which is the innermost-span rule of the batch extractor.
+``ProvFeed`` folds records into the same graph shape as ``provenance.build`` and keeps a
+list of what each record added, which the API streams. An activity is written when it
+ends, so an I/O call usually arrives before the activity holding it: it waits, and inner
+activities, ending first, claim it first, which is the innermost-span rule of the batch
+extractor.
 """
 
 from __future__ import annotations
@@ -28,8 +32,26 @@ ACTIVITY_CATS = ("moirai", "PROV")
 IO_CATS = ("POSIX", "STDIO")
 ACTIVITY_RELATIONS = ("used", "generated", "invalidated", "updated")
 ROLES = ("unknown", "input", "output", "intermediate", "parameter", "reference")
-STORES = ("memory", "gpu_memory", "local_disk", "parallel_fs", "burst_buffer", "object_store", "database", "network", "other")
-RELATIONS = {16: "derived_from", 17: "revision_of", 18: "contains", 19: "part_of", 20: "specialization_of", 21: "alternate_of", 22: "depends_on"}
+STORES = (
+    "memory",
+    "gpu_memory",
+    "local_disk",
+    "parallel_fs",
+    "burst_buffer",
+    "object_store",
+    "database",
+    "network",
+    "other",
+)
+RELATIONS = {
+    16: "derived_from",
+    17: "revision_of",
+    18: "contains",
+    19: "part_of",
+    20: "specialization_of",
+    21: "alternate_of",
+    22: "depends_on",
+}
 KEEP_DELTAS = 50_000
 
 
@@ -45,8 +67,9 @@ def expand(path: str) -> list[str]:
 
 
 def has_whole_member(path: str, limit: int = READ_LIMIT) -> bool:
-    """Whether a trace can be opened yet: the engine detects a file's schema from its head, so a file whose first gzip
-    member is still being written reads as a generic trace, and the process keeps that answer."""
+    """Whether a trace can be opened yet: the engine detects a file's schema from its head,
+    so a file whose first gzip member is still being written reads as a generic trace, and
+    the process keeps that answer."""
     try:
         with open(path, "rb") as fh:
             data = fh.read(limit)
@@ -153,7 +176,11 @@ class ProvFeed:
                 self._announce(key)
         elif name == "ET" and a.get("type") and a["type"] not in self.types:
             role = _named(ROLES, a.get("role", 0))
-            self.types[a["type"]] = {"name": a["type"], "role": role, "description": a.get("description", "")}
+            self.types[a["type"]] = {
+                "name": a["type"],
+                "role": role,
+                "description": a.get("description", ""),
+            }
             self._emit({"kind": "type", **self.types[a["type"]]})
         elif name == "EH" and a.get("id"):
             self._entity(a, r)
@@ -161,7 +188,11 @@ class ProvFeed:
             key = (a.get("relation"), a["subject"], a.get("object"))
             if key not in self._seen:
                 self._seen.add(key)
-                rel = {"relation": RELATIONS.get(a.get("relation"), str(a.get("relation"))), "subject": a["subject"], "object": a.get("object", "")}
+                rel = {
+                    "relation": RELATIONS.get(a.get("relation"), str(a.get("relation"))),
+                    "subject": a["subject"],
+                    "object": a.get("object", ""),
+                }
                 self.relations.append(rel)
                 self._emit({"kind": "relation", **rel})
         elif cat in ACTIVITY_CATS and r.get("ph") in (1, "X"):
@@ -179,8 +210,14 @@ class ProvFeed:
             if r.get("pid") not in cur["pids"]:
                 cur["pids"].append(r.get("pid"))
             return
-        self.entities[a["id"]] = {"hash": a["id"], "id": a["id"], "type": a.get("type", ""), "store": _named(STORES, a.get("store", 8)),
-                                  "uri": a.get("uri", ""), "pids": [r.get("pid")]}
+        self.entities[a["id"]] = {
+            "hash": a["id"],
+            "id": a["id"],
+            "type": a.get("type", ""),
+            "store": _named(STORES, a.get("store", 8)),
+            "uri": a.get("uri", ""),
+            "pids": [r.get("pid")],
+        }
         self._emit({"kind": "entity", **self.entities[a["id"]]})
 
     def _activity(self, r: dict[str, Any], a: dict[str, Any]) -> None:
@@ -189,7 +226,15 @@ class ProvFeed:
             return
         self._seen.add(aid)
         rels = a.get("relations") or {}
-        act = {"aid": aid, "name": r.get("name", ""), "activity": r.get("name", ""), "cat": r.get("cat", ""), "pid": r.get("pid"), "ts": r.get("ts") or 0, "dur": r.get("dur") or 0}
+        act = {
+            "aid": aid,
+            "name": r.get("name", ""),
+            "activity": r.get("name", ""),
+            "cat": r.get("cat", ""),
+            "pid": r.get("pid"),
+            "ts": r.get("ts") or 0,
+            "dur": r.get("dur") or 0,
+        }
         for key in ACTIVITY_RELATIONS:
             value = rels.get(key) or []
             act[key] = value if isinstance(value, list) else [value]
@@ -220,8 +265,9 @@ class ProvFeed:
     def _charge(self, aid: str, r: dict[str, Any], a: dict[str, Any]) -> None:
         name = r.get("name", "")
         op = _classify(name)
-        ret = a.get("ret") if isinstance(a.get("ret"), int) else 0
-        size = a.get("size") if name in ("fread", "fwrite") and isinstance(a.get("size"), int) else 1
+        ret, size = a.get("ret"), a.get("size")
+        ret = ret if isinstance(ret, int) else 0
+        size = size if name in ("fread", "fwrite") and isinstance(size, int) else 1
         got = self.access.setdefault((aid, a["fhash"], op), {"calls": 0, "bytes": 0})
         got["calls"] += int(a.get("dft_cnt") or 1)
         got["bytes"] += ret * size if op in ("read", "write") and ret > 0 else 0
@@ -231,7 +277,16 @@ class ProvFeed:
         path = self.files.get(key[1], "")
         if path and not _excluded(path) and key not in self._sent:
             self._sent.add(key)
-            self._emit({"kind": "access", "aid": key[0], "fhash": key[1], "path": path, "op": key[2], **self.access[key]})
+            self._emit(
+                {
+                    "kind": "access",
+                    "aid": key[0],
+                    "fhash": key[1],
+                    "path": path,
+                    "op": key[2],
+                    **self.access[key],
+                }
+            )
 
     def accesses(self) -> list[dict[str, Any]]:
         out = []
@@ -242,7 +297,8 @@ class ProvFeed:
         return out
 
     def snapshot(self) -> dict[str, Any]:
-        """The graph so far, in the shape of ``/api/prov/graph``, with the position deltas continue from."""
+        """The graph so far, in the shape of ``/api/prov/graph``, with the position deltas
+        continue from."""
         with self.lock:
             acc = self.accesses()
             paths = {x["path"]: x["fhash"] for x in acc}
@@ -251,10 +307,22 @@ class ProvFeed:
                 path = e["uri"][7:] if e["uri"].startswith("file://") else e["uri"]
                 if path in paths:
                     entity_files.append({"entity": e["hash"], "fhash": paths[path], "path": path})
-            return {"seq": self.seq, "types": list(self.types.values()), "entities": [dict(e) for e in self.entities.values()], "activities": list(self.activities),
-                    "entity_relations": list(self.relations), "accesses": acc, "entity_files": entity_files,
-                    "files": [{"fhash": h, "path": p, "mount": "", "rel": p} for p, h in paths.items()],
-                    "mounts": [], "stats": {"entities": len(self.entities), "activities": len(self.activities), "records": self.records}}
+            return {
+                "seq": self.seq,
+                "types": list(self.types.values()),
+                "entities": [dict(e) for e in self.entities.values()],
+                "activities": list(self.activities),
+                "entity_relations": list(self.relations),
+                "accesses": acc,
+                "entity_files": entity_files,
+                "files": [{"fhash": h, "path": p, "mount": "", "rel": p} for p, h in paths.items()],
+                "mounts": [],
+                "stats": {
+                    "entities": len(self.entities),
+                    "activities": len(self.activities),
+                    "records": self.records,
+                },
+            }
 
     def since(self, seq: int, limit: int = 2000) -> tuple[list[dict[str, Any]], int]:
         with self.lock:

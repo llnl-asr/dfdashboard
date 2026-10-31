@@ -13,14 +13,35 @@ import {
 } from "../data/api";
 import { edgePath, entityLabel, type Graph, layout, leaf, type Placed, select } from "./temporal";
 
-const PALETTE = ["#4e9fd6", "#e6a13c", "#5fb87a", "#d9675f", "#a07bd1", "#3fb5a8", "#d4c04a", "#e07fb3", "#7f9cc2", "#b8865a"];
+const PALETTE = [
+  "#4e9fd6",
+  "#e6a13c",
+  "#5fb87a",
+  "#d9675f",
+  "#a07bd1",
+  "#3fb5a8",
+  "#d4c04a",
+  "#e07fb3",
+  "#7f9cc2",
+  "#b8865a",
+];
 const ROW = 30;
 const COL = 18;
 const PAD = 16;
 const OVERSCAN = 20;
 
-const fmtTime = (us: number) => (us >= 1e6 ? (us / 1e6).toFixed(2) + " s" : us >= 1e3 ? (us / 1e3).toFixed(1) + " ms" : Math.round(us) + " µs");
-const fmtBytes = (n: number) => (n >= 1 << 20 ? (n / (1 << 20)).toFixed(1) + " MiB" : n >= 1024 ? (n / 1024).toFixed(1) + " KiB" : n + " B");
+const fmtTime = (us: number) =>
+  us >= 1e6
+    ? (us / 1e6).toFixed(2) + " s"
+    : us >= 1e3
+      ? (us / 1e3).toFixed(1) + " ms"
+      : Math.round(us) + " µs";
+const fmtBytes = (n: number) =>
+  n >= 1 << 20
+    ? (n / (1 << 20)).toFixed(1) + " MiB"
+    : n >= 1024
+      ? (n / 1024).toFixed(1) + " KiB"
+      : n + " B";
 
 export function ProvTimeline(props: { scope: string }) {
   const [activities, setActivities] = createSignal<ProvActivity[]>([]);
@@ -71,11 +92,25 @@ export function ProvTimeline(props: { scope: string }) {
     onCleanup(close);
   });
 
-  const graph = createMemo<Graph>(() => ({ activities: activities(), entities: entities(), accesses: accesses(), relations: relations() }));
-  const typeNames = createMemo(() => [...new Set([...entities().values()].map((e) => e.type))].sort());
-  const colorOf = createMemo(() => new Map(typeNames().map((t, i) => [t, PALETTE[i % PALETTE.length]])));
+  const graph = createMemo<Graph>(() => ({
+    activities: activities(),
+    entities: entities(),
+    accesses: accesses(),
+    relations: relations(),
+  }));
+  const typeNames = createMemo(() =>
+    [...new Set([...entities().values()].map((e) => e.type))].sort(),
+  );
+  const colorOf = createMemo(
+    () => new Map(typeNames().map((t, i) => [t, PALETTE[i % PALETTE.length]])),
+  );
   const placed = createMemo(() => {
-    const s = select(graph(), { activities: showActivities(), io: showIo(), hiddenTypes: hiddenTypes(), picked: picked() });
+    const s = select(graph(), {
+      activities: showActivities(),
+      io: showIo(),
+      hiddenTypes: hiddenTypes(),
+      picked: picked(),
+    });
     return layout(s.nodes, s.edges);
   });
   const t0 = createMemo(() => activities().reduce((m, a) => Math.min(m, a.ts), Infinity));
@@ -86,12 +121,17 @@ export function ProvTimeline(props: { scope: string }) {
   const lastRow = createMemo(() => Math.ceil((scrollTop() + height()) / ROW) + OVERSCAN);
   const visibleNodes = createMemo(() => placed().nodes.slice(firstRow(), lastRow()));
   const visibleEdges = createMemo(() =>
-    placed().edges.filter((e) => Math.max(e.fromRow, e.toRow) >= firstRow() && Math.min(e.fromRow, e.toRow) <= lastRow()),
+    placed().edges.filter(
+      (e) =>
+        Math.max(e.fromRow, e.toRow) >= firstRow() && Math.min(e.fromRow, e.toRow) <= lastRow(),
+    ),
   );
   const neighbors = createMemo(() => {
     const s = selected();
     const ids = new Set<string>();
-    if (s) for (const e of placed().edges) if (e.source === s.id || e.target === s.id) ids.add(e.source + ">" + e.target);
+    if (s)
+      for (const e of placed().edges)
+        if (e.source === s.id || e.target === s.id) ids.add(e.source + ">" + e.target);
     return ids;
   });
   const byType = createMemo(() => {
@@ -116,7 +156,8 @@ export function ProvTimeline(props: { scope: string }) {
   // Follow the newest events while the view is at the bottom, as a log does.
   createEffect(() => {
     const rows = placed().nodes.length;
-    if (scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < ROW * 4) scroller.scrollTop = rows * ROW;
+    if (scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < ROW * 4)
+      scroller.scrollTop = rows * ROW;
   });
 
   const activity = (aid: string) => activities().find((a) => a.aid === aid);
@@ -153,13 +194,22 @@ export function ProvTimeline(props: { scope: string }) {
                 {([type, list]) => (
                   <details>
                     <summary>
-                      <i class="pt-dot" style={{ background: colorOf().get(type) }} /> {type} <span class="muted">{list.length}</span>
+                      <i class="pt-dot" style={{ background: colorOf().get(type) }} /> {type}{" "}
+                      <span class="muted">{list.length}</span>
                     </summary>
                     <label class="muted">
                       <input
                         type="checkbox"
                         checked={list.every((e) => picked().has(e.hash))}
-                        onChange={(ev) => setPicked(toggle(picked(), list.map((e) => e.hash), ev.currentTarget.checked))}
+                        onChange={(ev) =>
+                          setPicked(
+                            toggle(
+                              picked(),
+                              list.map((e) => e.hash),
+                              ev.currentTarget.checked,
+                            ),
+                          )
+                        }
                       />
                       all {type}
                     </label>
@@ -169,7 +219,9 @@ export function ProvTimeline(props: { scope: string }) {
                           <input
                             type="checkbox"
                             checked={picked().has(e.hash)}
-                            onChange={(ev) => setPicked(toggle(picked(), [e.hash], ev.currentTarget.checked))}
+                            onChange={(ev) =>
+                              setPicked(toggle(picked(), [e.hash], ev.currentTarget.checked))
+                            }
                           />
                           {entityLabel(e)}
                         </label>
@@ -182,10 +234,20 @@ export function ProvTimeline(props: { scope: string }) {
           </details>
           <span class="muted">Show</span>
           <label class="pt-chip">
-            <input type="checkbox" checked={showActivities()} onChange={(e) => setShowActivities(e.currentTarget.checked)} /> Activities
+            <input
+              type="checkbox"
+              checked={showActivities()}
+              onChange={(e) => setShowActivities(e.currentTarget.checked)}
+            />{" "}
+            Activities
           </label>
           <label class="pt-chip">
-            <input type="checkbox" checked={showIo()} onChange={(e) => setShowIo(e.currentTarget.checked)} /> I/O
+            <input
+              type="checkbox"
+              checked={showIo()}
+              onChange={(e) => setShowIo(e.currentTarget.checked)}
+            />{" "}
+            I/O
           </label>
           <For each={typeNames()}>
             {(t) => (
@@ -193,15 +255,28 @@ export function ProvTimeline(props: { scope: string }) {
                 <input
                   type="checkbox"
                   checked={!hiddenTypes().has(t)}
-                  onChange={(e) => setHiddenTypes(toggle(hiddenTypes(), [t], !e.currentTarget.checked))}
+                  onChange={(e) =>
+                    setHiddenTypes(toggle(hiddenTypes(), [t], !e.currentTarget.checked))
+                  }
                 />
                 <i class="pt-dot" style={{ background: colorOf().get(t) }} /> {t}
               </label>
             )}
           </For>
         </div>
-        <div class="pt-scroll" ref={measure} onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}>
-          <Show when={ready() && placed().nodes.length} fallback={<div class="muted pt-empty">{ready() ? "No provenance records yet." : "Connecting…"}</div>}>
+        <div
+          class="pt-scroll"
+          ref={measure}
+          onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+        >
+          <Show
+            when={ready() && placed().nodes.length}
+            fallback={
+              <div class="muted pt-empty">
+                {ready() ? "No provenance records yet." : "Connecting…"}
+              </div>
+            }
+          >
             <svg class="pt-svg" width="100%" height={placed().nodes.length * ROW + PAD * 2}>
               <For each={visibleEdges()}>
                 {(e) => (
@@ -214,20 +289,48 @@ export function ProvTimeline(props: { scope: string }) {
               </For>
               <For each={visibleNodes()}>
                 {(n) => (
-                  <g class="pt-node" classList={{ on: selected()?.id === n.id }} onClick={() => setSelected(n)}>
+                  <g
+                    class="pt-node"
+                    classList={{ on: selected()?.id === n.id }}
+                    onClick={() => setSelected(n)}
+                  >
                     <rect class="pt-hit" x={0} y={y(n.row) - ROW / 2} width="100%" height={ROW} />
-                    <line class="pt-lead" x1={x(n.col) + 8} y1={y(n.row)} x2={labelX() - 4} y2={y(n.row)} />
+                    <line
+                      class="pt-lead"
+                      x1={x(n.col) + 8}
+                      y1={y(n.row)}
+                      x2={labelX() - 4}
+                      y2={y(n.row)}
+                    />
                     <Show
                       when={n.kind === "entity"}
                       fallback={
                         n.kind === "activity" ? (
-                          <rect class="pt-act" x={x(n.col) - 7} y={y(n.row) - 6} width={14} height={12} rx={3} />
+                          <rect
+                            class="pt-act"
+                            x={x(n.col) - 7}
+                            y={y(n.row) - 6}
+                            width={14}
+                            height={12}
+                            rx={3}
+                          />
                         ) : (
-                          <rect class="pt-file" x={x(n.col) - 5} y={y(n.row) - 6} width={10} height={12} />
+                          <rect
+                            class="pt-file"
+                            x={x(n.col) - 5}
+                            y={y(n.row) - 6}
+                            width={10}
+                            height={12}
+                          />
                         )
                       }
                     >
-                      <circle cx={x(n.col)} cy={y(n.row)} r={6.5} fill={colorOf().get(n.type ?? "") ?? "#888"} />
+                      <circle
+                        cx={x(n.col)}
+                        cy={y(n.row)}
+                        r={6.5}
+                        fill={colorOf().get(n.type ?? "") ?? "#888"}
+                      />
                     </Show>
                     <text class={`pt-label ${n.kind}`} x={labelX()} y={y(n.row) + 4}>
                       {n.label}
@@ -295,7 +398,10 @@ export function ProvTimeline(props: { scope: string }) {
                         <For each={accesses().filter((x) => x.aid === a().aid)}>
                           {(x) => (
                             <li>
-                              <span class="muted">{x.op}</span> {leaf(x.path)} <span class="muted">{x.calls}× {x.bytes ? fmtBytes(x.bytes) : ""}</span>
+                              <span class="muted">{x.op}</span> {leaf(x.path)}{" "}
+                              <span class="muted">
+                                {x.calls}× {x.bytes ? fmtBytes(x.bytes) : ""}
+                              </span>
                             </li>
                           )}
                         </For>
@@ -362,7 +468,10 @@ export function ProvTimeline(props: { scope: string }) {
                   <For each={accesses().filter((x) => x.path === s().ref)}>
                     {(x) => (
                       <li>
-                        <a onClick={() => goto("A:" + x.aid)}>{activity(x.aid)?.name ?? x.aid}</a> <span class="muted">{x.op} {x.calls}×</span>
+                        <a onClick={() => goto("A:" + x.aid)}>{activity(x.aid)?.name ?? x.aid}</a>{" "}
+                        <span class="muted">
+                          {x.op} {x.calls}×
+                        </span>
                       </li>
                     )}
                   </For>

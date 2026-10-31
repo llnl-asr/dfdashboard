@@ -117,31 +117,20 @@ class TraceData:
         runtime: Optional[Any] = None,
         source: Optional[str] = None,
     ) -> None:
-        """``source`` is the directory the files came from, when they all did.
-
-        A directory becomes one viewer, so the engine fans the files across its
-        own threads and merges the schema in C++ (measured 8x faster than a
-        per-file read plus a Python merge on 29 files). An explicit file list
-        keeps one viewer per file, which is what keeps heterogeneous sets
-        readable.
-        """
+        """``source`` is the directory the files came from, when they all did."""
         if isinstance(paths, str):
             paths = [paths]
         self._paths = [os.path.abspath(p) for p in paths]
         # Filled by the run registry: file path -> index into the run order, so
         # the timeline can group lanes and draw the band boundaries.
         self.file_runs: dict[str, int] = {}
-        if source and os.path.isdir(source):
-            index_paths = [_index_path_for(index_dir, source)]
-            self._viewers = [
-                TraceViewer(source, index_path=index_paths[0] or None, runtime=runtime)
-            ]
-        else:
-            index_paths = [_index_path_for(index_dir, p) for p in self._paths]
-            self._viewers = [
-                TraceViewer(p, index_path=ip or None, runtime=runtime)
-                for p, ip in zip(self._paths, index_paths)
-            ]
+        # One viewer per file, never one on the directory: dftracer-utils 0.0.14
+        # returned 169 of 242 entities from a directory of 29 files, 8 on first open.
+        index_paths = [_index_path_for(index_dir, p) for p in self._paths]
+        self._viewers = [
+            TraceViewer(p, index_path=ip or None, runtime=runtime)
+            for p, ip in zip(self._paths, index_paths)
+        ]
         # The engine rebuilds a stale index inside a read, and a rebuild racing
         # another read on the same database fails with "Cannot upgrade RocksDB
         # instance ... while it is still in use", so reads on one database are

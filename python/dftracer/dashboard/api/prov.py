@@ -46,7 +46,8 @@ async def prov_graph(
 
 
 def _run_paths(request: Request, run: str) -> list[str]:
-    """Where the run's traces are. A run still being written has no index yet, so this reads the tree, not the trace layer."""
+    """Where the run's traces are. A run still being written has no index yet, so this
+    reads the tree, not the trace layer."""
     registry = get_registry(request)
     if registry is not None:
         if not run:
@@ -61,7 +62,8 @@ def _run_paths(request: Request, run: str) -> list[str]:
 
 @router.get("/prov/stream")
 async def prov_stream(request: Request, run: str = "") -> StreamingResponse:
-    """Server-sent events: a ``snapshot`` of the graph, then a ``delta`` per change, while the trace grows."""
+    """Server-sent events: a ``snapshot`` of the graph, then a ``delta`` per change, while
+    the trace grows."""
     if not hasattr(request.app.state, "prov_feeds"):
         request.app.state.prov_feeds = {}
     feeds = request.app.state.prov_feeds
@@ -88,4 +90,8 @@ async def prov_stream(request: Request, run: str = "") -> StreamingResponse:
                 quiet = 0.0
                 yield ": keep-alive\n\n"
 
-    return StreamingResponse(frames(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
