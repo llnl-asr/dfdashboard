@@ -83,7 +83,7 @@ def main(argv: list[str] | None = None) -> None:
             pass
         orig_handle_exit(sig, frame)  # ty: ignore[invalid-argument-type]
 
-    server.handle_exit = handle_exit  # ty: ignore[invalid-assignment]
+    server.handle_exit = handle_exit
     try:
         server.run()
     except KeyboardInterrupt:
