@@ -7,6 +7,10 @@
 // Files touched by activities are nodes too (label: path relative to its mount);
 // mount points are storage nodes. Edges: read file->activity, write
 // activity->file, entity -stored in-> file, file -on-> storage.
+// Recorded edges (used, generated, updated, invalidated, entity relations) are
+// solid; the dashboard's inferences (I/O matched to an activity by time, entity
+// to file by uri, file to storage by mount) are dotted, and the shared switch
+// hides them together with the files and storage only they reach.
 import cytoscape from "cytoscape";
 import dagre from "cytoscape-dagre";
 import {
@@ -20,6 +24,7 @@ import {
   Show,
 } from "solid-js";
 import { fetchProvGraph, type ProvGraphResponse } from "../data/api";
+import { type EdgeSwitch, INFERRED_DASH, Legend } from "./Legend";
 import type { LiveProv } from "./live";
 import { PALETTE } from "./typegraph";
 import "./prov.css";
@@ -27,18 +32,24 @@ import "./prov.css";
 cytoscape.use(dagre);
 
 const DATA_OPS = new Set(["read", "write"]);
+const IO_SHOWN = new Set(["read", "write", "delete"]); // open and stat are noise, as in the timeline
 const FILE_COLOR = "#7f9cc2";
 const MOUNT_COLOR = "#a07bd1";
 
 const fileId = (path: string) => "F:" + path;
 const IO_COLOR = "#9aa7b4";
 
-// One link from an activity to each file it touched.
+// One link per activity, file and direction: a read runs file -> activity, a write or delete activity -> file.
 function ioEdges(d: ProvGraphResponse): cytoscape.ElementDefinition[] {
-  const pairs = new Set((d.accesses ?? []).map((x) => "A:" + x.aid + "\u001f" + fileId(x.path)));
+  const pairs = new Set<string>();
+  for (const x of d.accesses ?? []) {
+    if (!IO_SHOWN.has(x.op)) continue;
+    const [a, f] = ["A:" + x.aid, fileId(x.path)];
+    pairs.add(x.op === "read" ? f + "\u001f" + a : a + "\u001f" + f);
+  }
   return [...pairs].map((p) => {
     const [source, target] = p.split("\u001f");
-    return { data: { source, target, kind: "ioagg", dir: "any", color: IO_COLOR } };
+    return { data: { source, target, kind: "ioagg", inferred: true, color: IO_COLOR } };
   });
 }
 
@@ -78,7 +89,12 @@ function count(nodes: cytoscape.NodeCollection): [string, number][] {
   return [...m.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-export function ProvenanceView(props: { mode: "dark" | "light"; scope: string; live: LiveProv }) {
+export function ProvenanceView(props: {
+  mode: "dark" | "light";
+  scope: string;
+  live: LiveProv;
+  edges: EdgeSwitch;
+}) {
   let host!: HTMLDivElement;
   let cy: cytoscape.Core | undefined;
   const [data, setData] = createSignal<ProvGraphResponse | null>(null);
@@ -191,10 +207,9 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string; l
           opacity: 0.75,
         },
       },
-      { selector: 'edge[rel="used"]', style: { "line-style": "dashed" } },
       {
         selector: 'edge[rel="invalidated"]',
-        style: { "line-style": "dashed", "line-color": "#d9675f", "target-arrow-color": "#d9675f" },
+        style: { "line-color": "#d9675f", "target-arrow-color": "#d9675f" },
       },
       {
         selector: 'edge[rel="updated"]',
@@ -203,7 +218,6 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string; l
       {
         selector: 'edge[rel="erel"]',
         style: {
-          "line-style": "dotted",
           "line-color": "#a07bd1",
           "target-arrow-color": "#a07bd1",
           "target-arrow-shape": "vee",
@@ -247,18 +261,18 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string; l
           "text-max-width": "180px",
         },
       },
-      { selector: 'edge[op="open"], edge[op="meta"]', style: { "line-style": "dotted" } },
       {
         selector: 'edge[kind="ioagg"]',
         style: { "line-color": "data(color)", "target-arrow-color": "data(color)", width: 1.3 },
       },
-      { selector: 'edge[dir="meta"]', style: { "line-style": "dotted" } },
-      { selector: 'edge[dir="any"]', style: { "target-arrow-shape": "none" } },
-      { selector: 'edge[op="delete"]', style: { "line-style": "dashed" } },
+      {
+        selector: "edge[?inferred]",
+        style: { "line-style": "dashed", "line-dash-pattern": INFERRED_DASH } as cytoscape.Css.Edge,
+      },
+      { selector: ".hidden", style: { display: "none" } },
       {
         selector: 'edge[rel="stored_in"]',
         style: {
-          "line-style": "dotted",
           "line-color": FILE_COLOR,
           "target-arrow-shape": "none",
           width: 1,
@@ -304,7 +318,7 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string; l
 
   function layout(eles?: cytoscape.Collection) {
     if (!cy) return;
-    const target = eles ?? cy.elements(":visible");
+    const target = (eles ?? cy.elements()).filter(":visible");
     target
       .layout({
         name: "dagre",
@@ -407,7 +421,9 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string; l
           fhash: f.fhash,
         },
       });
-      els.push({ data: { source: fileId(f.path), target: "M:" + f.mount, rel: "on" } });
+      els.push({
+        data: { source: fileId(f.path), target: "M:" + f.mount, rel: "on", inferred: true },
+      });
     }
     els.push(...ioEdges(d));
     // entity -> entity relations (ER records): contains, derived_from, ...
@@ -417,14 +433,41 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string; l
       els.push({ data: { source: r.subject, target: r.object, rel: "erel", erel: r.relation } });
     }
     for (const ef of d.entity_files ?? [])
-      els.push({ data: { source: ef.entity, target: fileId(ef.path), rel: "stored_in" } });
+      els.push({
+        data: { source: ef.entity, target: fileId(ef.path), rel: "stored_in", inferred: true },
+      });
     cy = cytoscape({ container: host, elements: els, style: style(), wheelSensitivity: 0.25 });
     cy.on("tap", "node", (ev) => showDetail(ev.target));
     cy.on("tap", (ev) => {
       if (ev.target === cy) setDetail(null);
     });
-    // No layout here: the caller applies the default filters first and lays
-    // out only what is visible (laying out every I/O edge level is slow).
+    // No layout here: the caller applies the edge switch first and lays
+    // out only what is visible (laying out every I/O edge is slow).
+  }
+
+  /** Show or hide the inferred edges, and the files and storage nothing else reaches, then lay out what is left. */
+  function applyEdges() {
+    if (!cy) return;
+    const on = props.edges.inferred();
+    cy.batch(() => {
+      cy!.elements().removeClass("hidden");
+      if (on) {
+        // A file only touched by open or stat has no edge; it says nothing here.
+        cy!
+          .nodes('[kind="file"]')
+          .filter((n) => n.connectedEdges('[kind="ioagg"], [rel="stored_in"]').empty())
+          .addClass("hidden");
+      } else {
+        cy!.edges("[?inferred]").addClass("hidden");
+        cy!.nodes('[kind="file"], [kind="mount"]').addClass("hidden");
+      }
+      cy!
+        .nodes('[kind="mount"]')
+        .filter((m) => m.incomers("node").not(".hidden").empty())
+        .addClass("hidden");
+    });
+    if (sel()) trace();
+    else layout();
   }
 
   function showDetail(n: cytoscape.NodeSingular) {
@@ -663,6 +706,7 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string; l
       setData(d);
       if (d.entities.length || d.activities.length) {
         build(d);
+        applyEdges();
       }
     } catch (e) {
       if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
@@ -679,6 +723,7 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string; l
       ? l.activities.length - d.activities.length + (l.entities.length - d.entities.length)
       : 0;
   };
+  createEffect(on(() => props.edges.inferred(), applyEdges, { defer: true }));
   // Re-read the theme tokens when the app's dark/light mode flips.
   createEffect(
     on(
@@ -892,10 +937,47 @@ export function ProvenanceView(props: { mode: "dark" | "light"; scope: string; l
             </div>
           )}
         </Show>
-        <div class="prov-hint">
-          Click a node for details · ellipse: entity · box: activity · square: file · barrel:
-          storage · arrows: generated / used (dashed) / read / write
-        </div>
+        <Legend
+          vertices={[
+            { label: "entity (fill: type)", shape: "ellipse", color: "var(--muted)" },
+            { label: "activity", shape: "box" },
+            { label: "file", shape: "file", color: FILE_COLOR },
+            { label: "storage (mount)", shape: "barrel", color: MOUNT_COLOR },
+            { label: "unregistered hash", shape: "ellipse", color: "#d1524e" },
+          ]}
+          edges={[
+            { label: "used: entity → activity" },
+            { label: "generated: activity → entity" },
+            { label: "updated: activity → entity", color: "#e6a13c" },
+            { label: "invalidated: activity → entity", color: "#d9675f" },
+            { label: "entity relation (label)", color: "#a07bd1" },
+            {
+              label: "read: file → activity · write: activity → file",
+              color: IO_COLOR,
+              inferred: true,
+              note: "The I/O call fell inside the activity's span on the same process.",
+            },
+            {
+              label: "stored in: entity — file",
+              color: FILE_COLOR,
+              inferred: true,
+              arrow: false,
+              note: "The entity's uri names the file or a directory holding it.",
+            },
+            {
+              label: "on: file — storage",
+              color: MOUNT_COLOR,
+              inferred: true,
+              arrow: false,
+              note: "The file's path lies under the mount point.",
+            },
+          ]}
+          types={types().map((t) => ({ name: t.t, color: t.c }))}
+          inferred={props.edges.inferred()}
+          onInferred={props.edges.setInferred}
+          extra="Hiding inferred edges also hides files and storage."
+        />
+        <div class="prov-hint">Click a node for details · trace an entity from the left rail</div>
       </div>
     </div>
   );

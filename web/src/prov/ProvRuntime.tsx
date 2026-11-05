@@ -11,6 +11,7 @@ import {
   Show,
 } from "solid-js";
 import type { ProvEntity } from "../data/api";
+import { type EdgeSwitch, INFERRED_DASH, Legend } from "./Legend";
 import type { LiveProv } from "./live";
 import { linked, runtime, type Runtime, type Span } from "./runtime";
 import { entityLabel, PALETTE, typeGraph } from "./typegraph";
@@ -28,6 +29,7 @@ const ZOOM_STEP = 1.2;
 const MAX_ZOOM = 100000;
 const TICKS = 8;
 const FOLLOW_DEPTH = 1;
+const ARROW = 6;
 
 const fmtTime = (us: number) => {
   if (us >= 60e6) return `${(us / 60e6).toFixed(1)} min`;
@@ -36,7 +38,7 @@ const fmtTime = (us: number) => {
   return `${Math.round(us)} µs`;
 };
 
-export function ProvRuntime(props: { mode: "dark" | "light"; live: LiveProv }) {
+export function ProvRuntime(props: { mode: "dark" | "light"; live: LiveProv; edges: EdgeSwitch }) {
   let scroller!: HTMLDivElement;
   let canvas!: HTMLCanvasElement;
   const data = () => props.live.data();
@@ -147,10 +149,20 @@ export function ProvRuntime(props: { mode: "dark" | "light"; live: LiveProv }) {
       c.globalAlpha = 1;
     });
 
-    const links = p !== null ? follow() : run.links.length <= MAX_LINKS_AT_REST ? run.links : [];
-    c.strokeStyle = p !== null ? accent : muted;
-    c.globalAlpha = p !== null ? 0.9 : 0.25;
+    // Every link is inferred: the trace records which entity each activity made and used, not activity to activity.
+    const links = !props.edges.inferred()
+      ? []
+      : p !== null
+        ? follow()
+        : run.links.length <= MAX_LINKS_AT_REST
+          ? run.links
+          : [];
+    const ink = p !== null ? accent : muted;
+    c.strokeStyle = ink;
+    c.fillStyle = ink;
+    c.globalAlpha = p !== null ? 0.9 : 0.35;
     c.lineWidth = p !== null ? 1.5 : 1;
+    c.setLineDash(INFERRED_DASH);
     for (const l of links) {
       const a = run.spans[l.from];
       const b = run.spans[l.to];
@@ -163,7 +175,15 @@ export function ProvRuntime(props: { mode: "dark" | "light"; live: LiveProv }) {
       c.moveTo(x1, y1);
       c.bezierCurveTo(x1 + bend, y1, x2 - bend, y2, x2, y2);
       c.stroke();
+      // The curve meets the user horizontally, so the head points right into its start.
+      c.beginPath();
+      c.moveTo(x2, y2);
+      c.lineTo(x2 - ARROW, y2 - ARROW / 2);
+      c.lineTo(x2 - ARROW, y2 + ARROW / 2);
+      c.closePath();
+      c.fill();
     }
+    c.setLineDash([]);
     c.globalAlpha = 1;
     c.lineWidth = 1;
 
@@ -242,7 +262,7 @@ export function ProvRuntime(props: { mode: "dark" | "light"; live: LiveProv }) {
         },
       ),
     );
-    createEffect(on([r, zoom, offset, picked, () => props.mode], draw));
+    createEffect(on([r, zoom, offset, picked, () => props.mode, props.edges.inferred], draw));
     const seen = new ResizeObserver(draw);
     seen.observe(scroller);
     onCleanup(() => seen.disconnect());
@@ -329,6 +349,36 @@ export function ProvRuntime(props: { mode: "dark" | "light"; live: LiveProv }) {
             />
           </div>
         </div>
+        <Legend
+          vertices={[
+            {
+              label: "activity run (fill: name, width: duration)",
+              shape: "bar",
+              color: "var(--muted)",
+            },
+            { label: "entity it made (fill: entity type)", shape: "dot", color: "var(--text)" },
+          ]}
+          edges={[
+            {
+              label: "made → used: activity → activity",
+              inferred: true,
+              note: "The source activity generated an entity the target activity used.",
+            },
+          ]}
+          groups={[
+            {
+              title: "Activities (bar fill)",
+              items: [...nameColor().entries()].map(([name, color]) => ({ name, color })),
+            },
+            {
+              title: "Entity types (dot fill)",
+              items: [...typeColor().values()].map((t) => ({ name: t.name, color: t.color })),
+            },
+          ]}
+          inferred={props.edges.inferred()}
+          onInferred={props.edges.setInferred}
+          extra="Lanes are processes; time runs left to right."
+        />
         <div class="prov-hint">
           {data() && !data()!.activities.length
             ? "This trace has no provenance activities."

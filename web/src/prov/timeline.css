@@ -36,6 +36,7 @@
   min-height: 0;
 }
 .pt-main {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -132,7 +133,18 @@
 }
 .pt-edge.io {
   stroke: #7f9cc2;
-  stroke-dasharray: 4 3;
+}
+.pt-edge.inferred {
+  stroke-dasharray: 2 3;
+}
+.pt-head path {
+  fill: var(--dim);
+}
+.pt-head.io path {
+  fill: #7f9cc2;
+}
+.pt-head.hi path {
+  fill: var(--accent);
 }
 .pt-edge.stored {
   stroke-dasharray: 1 3;

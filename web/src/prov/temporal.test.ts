@@ -120,10 +120,21 @@ describe("select", () => {
   it("hiding a type hides its entities", () => {
     expect(ids({ hiddenTypes: new Set(["other"]) })).not.toContain("E:x1");
   });
-  it("hiding activities links entities directly", () => {
+  it("hiding activities links entities directly, and marks that link inferred", () => {
     const s = select(g, view({ activities: false }));
     expect(s.nodes.some((x) => x.kind === "activity")).toBe(false);
-    expect(s.edges).toContainEqual({ source: "E:e1", target: "E:e2", kind: "lineage" });
+    expect(s.edges).toContainEqual({
+      source: "E:e1",
+      target: "E:e2",
+      kind: "lineage",
+      inferred: true,
+    });
+    expect(select(g, view({ activities: false, inferred: false })).edges).toEqual([]);
+  });
+  it("a recorded used or generated edge is not inferred", () => {
+    const s = select(g, view());
+    expect(s.edges).toContainEqual({ source: "E:e1", target: "A:fit", kind: "lineage" });
+    expect(select(g, view({ inferred: false })).edges).toEqual(s.edges);
   });
   it("shows reads and writes as files, and leaves open and stat out", () => {
     const io: Graph = {
@@ -141,8 +152,19 @@ describe("select", () => {
         .map((x) => x.label)
         .sort(),
     ).toEqual(["a", "b"]);
-    expect(s.edges).toContainEqual({ source: "F:/d/a", target: "A:fit", kind: "io" });
-    expect(s.edges).toContainEqual({ source: "A:fit", target: "F:/d/b", kind: "io" });
+    expect(s.edges).toContainEqual({
+      source: "F:/d/a",
+      target: "A:fit",
+      kind: "io",
+      inferred: true,
+    });
+    expect(s.edges).toContainEqual({
+      source: "A:fit",
+      target: "F:/d/b",
+      kind: "io",
+      inferred: true,
+    });
     expect(select(io, view({ io: false })).nodes.some((x) => x.kind === "file")).toBe(false);
+    expect(select(io, view({ inferred: false })).nodes.some((x) => x.kind === "file")).toBe(false);
   });
 });
