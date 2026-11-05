@@ -1,5 +1,5 @@
 // The Provenance section of the rail: what a run does (behaviors), when (runtime), and its graph over time and as a whole.
-import { lazy, Match, Show, Suspense, Switch } from "solid-js";
+import { createSignal, lazy, Match, Show, Suspense, Switch } from "solid-js";
 import type { RunInfo } from "../data/api";
 import { createLiveProv } from "./live";
 import { LiveBadge } from "./LiveBadge";
@@ -25,6 +25,9 @@ export function ProvTab(props: {
 }) {
   // One live source for every view, so switching views loads nothing again.
   const live = createLiveProv(() => props.scope);
+  // Whether inferred (dotted) edges are drawn; one switch for every view, so it holds across them.
+  const [inferred, setInferred] = createSignal(true);
+  const edges = { inferred, setInferred };
   return (
     <div class="ptab">
       <div class="ptab-head">
@@ -44,20 +47,20 @@ export function ProvTab(props: {
       <Switch>
         <Match when={props.view === "provenance"}>
           <Suspense>
-            <TypeGraphView mode={props.mode} live={live} />
+            <TypeGraphView mode={props.mode} live={live} edges={edges} />
           </Suspense>
         </Match>
         <Match when={props.view === "prov-runtime"}>
           <Suspense>
-            <ProvRuntime mode={props.mode} live={live} />
+            <ProvRuntime mode={props.mode} live={live} edges={edges} />
           </Suspense>
         </Match>
         <Match when={props.view === "prov-temporal"}>
-          <ProvTimeline live={live} />
+          <ProvTimeline live={live} edges={edges} />
         </Match>
         <Match when={props.view === "prov-graph"}>
           <Suspense>
-            <ProvenanceView mode={props.mode} scope={props.scope} live={live} />
+            <ProvenanceView mode={props.mode} scope={props.scope} live={live} edges={edges} />
           </Suspense>
         </Match>
       </Switch>

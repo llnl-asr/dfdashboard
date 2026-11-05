@@ -2,6 +2,7 @@
 // /api/prov/stream, and the right bar describes what is selected.
 import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { ProvEntity } from "../data/api";
+import { type EdgeSwitch, Legend } from "./Legend";
 import type { LiveProv } from "./live";
 import { edgePath, entityLabel, type Graph, layout, leaf, type Placed, select } from "./temporal";
 
@@ -35,7 +36,7 @@ const fmtBytes = (n: number) =>
       ? (n / 1024).toFixed(1) + " KiB"
       : n + " B";
 
-export function ProvTimeline(props: { live: LiveProv }) {
+export function ProvTimeline(props: { live: LiveProv; edges: EdgeSwitch }) {
   const activities = createMemo(() => props.live.data()?.activities ?? []);
   const entities = createMemo(
     () => new Map((props.live.data()?.entities ?? []).map((e) => [e.hash, e])),
@@ -71,6 +72,7 @@ export function ProvTimeline(props: { live: LiveProv }) {
       io: showIo(),
       hiddenTypes: hiddenTypes(),
       picked: picked(),
+      inferred: props.edges.inferred(),
     });
     return layout(s.nodes, s.edges);
   });
@@ -239,12 +241,35 @@ export function ProvTimeline(props: { live: LiveProv }) {
             }
           >
             <svg class="pt-svg" width="100%" height={placed().nodes.length * ROW + PAD * 2}>
+              <defs>
+                <For each={["lineage", "io", "stored", "hi"]}>
+                  {(k) => (
+                    <marker
+                      id={`pt-head-${k}`}
+                      class={`pt-head ${k}`}
+                      viewBox="0 0 8 8"
+                      refX="17"
+                      refY="4"
+                      markerWidth="6"
+                      markerHeight="6"
+                      markerUnits="userSpaceOnUse"
+                      orient="auto"
+                    >
+                      <path d="M0,0 L8,4 L0,8 z" />
+                    </marker>
+                  )}
+                </For>
+              </defs>
               <For each={visibleEdges()}>
                 {(e) => (
                   <path
                     class={`pt-edge ${e.kind}`}
-                    classList={{ hi: neighbors().has(e.source + ">" + e.target) }}
+                    classList={{
+                      hi: neighbors().has(e.source + ">" + e.target),
+                      inferred: !!e.inferred,
+                    }}
                     d={edgePath(e, x, y)}
+                    marker-end={`url(#pt-head-${neighbors().has(e.source + ">" + e.target) ? "hi" : e.kind})`}
                   />
                 )}
               </For>
@@ -305,6 +330,40 @@ export function ProvTimeline(props: { live: LiveProv }) {
             </svg>
           </Show>
         </div>
+        <Legend
+          vertices={[
+            { label: "entity (fill: type)", shape: "ellipse", color: "var(--muted)" },
+            ...(showActivities() ? [{ label: "activity", shape: "square" as const }] : []),
+            ...(showActivities() && showIo() && props.edges.inferred()
+              ? [{ label: "file", shape: "file" as const, color: "#7f9cc2" }]
+              : []),
+          ]}
+          edges={[
+            ...(showActivities()
+              ? [{ label: "used: entity → activity · generated: activity → entity" }]
+              : [
+                  {
+                    label: "made from: entity → entity",
+                    inferred: true,
+                    note: "An activity used the source and generated the target.",
+                  },
+                  { label: "derived from / revision of (recorded relation)" },
+                ]),
+            ...(showActivities() && showIo()
+              ? [
+                  {
+                    label: "read: file → activity · write: activity → file",
+                    color: "#7f9cc2",
+                    inferred: true,
+                    note: "The I/O call fell inside the activity's span on the same process.",
+                  },
+                ]
+              : []),
+          ]}
+          inferred={props.edges.inferred()}
+          onInferred={props.edges.setInferred}
+          extra="Time runs down; an edge that curves out to the right goes back in time."
+        />
       </div>
       <aside class="pt-side">
         <Show

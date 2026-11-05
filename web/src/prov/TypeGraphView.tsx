@@ -13,6 +13,7 @@ import {
   Show,
 } from "solid-js";
 import type { ProvEntity } from "../data/api";
+import { type EdgeSwitch, INFERRED_DASH, Legend } from "./Legend";
 import type { LiveProv } from "./live";
 import {
   behaviors,
@@ -100,7 +101,11 @@ type Picked =
   | { kind: "edge"; edge: VEdge }
   | { kind: "entity"; entity: ProvEntity };
 
-export function TypeGraphView(props: { mode: "dark" | "light"; live: LiveProv }) {
+export function TypeGraphView(props: {
+  mode: "dark" | "light";
+  live: LiveProv;
+  edges: EdgeSwitch;
+}) {
   let host!: HTMLDivElement;
   let cy: cytoscape.Core | undefined;
   let drawn = "";
@@ -134,7 +139,12 @@ export function TypeGraphView(props: { mode: "dark" | "light"; live: LiveProv })
     const g = graph();
     if (!g) return null;
     const v = view(g, expanded(), (t) => limits().get(t) ?? INSTANCE_STEP);
-    return relations() ? v : { ...v, edges: v.edges.filter((e) => e.kind === FLOW) };
+    const inferred = props.edges.inferred();
+    // A flow between types is inferred (it goes through an activity); a relation was recorded.
+    return {
+      ...v,
+      edges: v.edges.filter((e) => (e.kind === FLOW ? inferred : relations())),
+    };
   });
   const related = (name: string, side: "source" | "target") => {
     const out = new Map<string, number>();
@@ -251,9 +261,15 @@ export function TypeGraphView(props: { mode: "dark" | "light"; live: LiveProv })
         },
       },
       {
-        selector: `edge[kind!="${FLOW}"]`,
+        selector: `edge[kind="${FLOW}"]`,
         style: {
           "line-style": "dashed",
+          "line-dash-pattern": INFERRED_DASH,
+        } as cytoscape.Css.Edge,
+      },
+      {
+        selector: `edge[kind!="${FLOW}"]`,
+        style: {
           "line-color": accent,
           "target-arrow-color": accent,
           color: accent,
@@ -338,9 +354,9 @@ export function TypeGraphView(props: { mode: "dark" | "light"; live: LiveProv })
         })),
       ],
     });
-    // Relations point any way, so only data flow decides the left-to-right order.
-    cy.elements()
-      .not(`edge[kind!="${FLOW}"]`)
+    // Relations point any way, so data flow decides the left-to-right order; with no flow shown, relations do.
+    const flows = cy.edges(`[kind="${FLOW}"]`);
+    (flows.nonempty() ? cy.elements().not(`edge[kind!="${FLOW}"]`) : cy.elements())
       .layout({
         name: "dagre",
         rankDir: "LR",
@@ -587,6 +603,25 @@ export function TypeGraphView(props: { mode: "dark" | "light"; live: LiveProv })
               </div>
             )}
           </Show>
+          <Legend
+            vertices={[
+              { label: "entity type (size: instances)", shape: "square", color: "var(--muted)" },
+              { label: "expanded type", shape: "tag", color: "var(--muted)" },
+              { label: "entity instance", shape: "ellipse", color: "var(--muted)" },
+              { label: "instances not shown yet", shape: "tag" },
+            ]}
+            edges={[
+              { label: "entity relation (label: relation)", color: "var(--accent)" },
+              {
+                label: "used by an activity that made",
+                inferred: true,
+                note: "An activity used the source and generated or updated the target. Width: instance links.",
+              },
+            ]}
+            types={rows().map((t) => ({ name: t.name, color: t.color }))}
+            inferred={props.edges.inferred()}
+            onInferred={props.edges.setInferred}
+          />
           <div class="prov-hint">
             {data() && !data()!.entities.length
               ? "This trace has no provenance entities."

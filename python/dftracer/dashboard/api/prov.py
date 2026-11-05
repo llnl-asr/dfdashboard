@@ -58,7 +58,8 @@ def _run_paths(request: Request, run: str) -> list[str]:
             raise ApiError(404, NO_SUCH_RUN, f"no run: {run}")
         return [path]
     trace = getattr(request.app.state, "trace", None)
-    return list(getattr(trace, "files", None) or [])
+    # The trace's own files; ``TraceData.files`` is the traced-file map, not these.
+    return list(getattr(trace, "paths", None) or [])
 
 
 @router.get("/prov/stream")

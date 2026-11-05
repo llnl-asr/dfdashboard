@@ -17,6 +17,7 @@ export interface TEdge {
   source: string;
   target: string;
   kind: "lineage" | "io" | "stored";
+  inferred?: boolean; // the dashboard derived it; otherwise the trace recorded it
 }
 export interface Placed extends TNode {
   row: number;
@@ -45,6 +46,7 @@ export interface View {
   io: boolean;
   hiddenTypes: Set<string>;
   picked: Set<string>;
+  inferred?: boolean; // draw inferred edges (and the files only they reach); default true
 }
 
 const IO_SHOWN = new Set(["read", "write", "delete"]); // open and stat are noise, as in the graph view's default
@@ -109,11 +111,13 @@ export function select(g: Graph, v: View): { nodes: TNode[]; edges: TEdge[] } {
   const nodes: TNode[] = [];
   const edges: TEdge[] = [];
   const seen = new Set<string>();
-  const edge = (source: string, target: string, kind: TEdge["kind"]) => {
+  const withInferred = v.inferred ?? true;
+  const edge = (source: string, target: string, kind: TEdge["kind"], inferred = false) => {
     const k = source + ">" + target;
+    if (inferred && !withInferred) return;
     if (source !== target && !seen.has(k)) {
       seen.add(k);
-      edges.push({ source, target, kind });
+      edges.push(inferred ? { source, target, kind, inferred } : { source, target, kind });
     }
   };
   for (const [id, t] of born) {
@@ -137,14 +141,15 @@ export function select(g: Graph, v: View): { nodes: TNode[]; edges: TEdge[] } {
   } else {
     for (const a of acts) {
       for (const x of inputsOf(a))
-        for (const y of outputsOf(a)) if (shown(x) && shown(y)) edge("E:" + x, "E:" + y, "lineage");
+        for (const y of outputsOf(a))
+          if (shown(x) && shown(y)) edge("E:" + x, "E:" + y, "lineage", true); // through an activity
     }
     for (const r of g.relations) {
       if (LINEAGE_RELATIONS.has(r.relation) && shown(r.subject) && shown(r.object))
         edge("E:" + r.object, "E:" + r.subject, "lineage");
     }
   }
-  if (v.io && v.activities) {
+  if (v.io && v.activities && withInferred) {
     const ids = new Set(acts.map((a) => a.aid));
     const ts = new Map(acts.map((a) => [a.aid, a.ts]));
     const files = new Map<string, number>();
@@ -154,8 +159,9 @@ export function select(g: Graph, v: View): { nodes: TNode[]; edges: TEdge[] } {
     for (const [path, t] of files)
       nodes.push({ id: "F:" + path, kind: "file", label: leaf(path), t, ref: path });
     for (const x of io) {
-      if (x.op === "read") edge("F:" + x.path, "A:" + x.aid, "io");
-      else edge("A:" + x.aid, "F:" + x.path, "io");
+      // Matched to the activity by time, so inferred.
+      if (x.op === "read") edge("F:" + x.path, "A:" + x.aid, "io", true);
+      else edge("A:" + x.aid, "F:" + x.path, "io", true);
     }
   }
   return { nodes, edges };
